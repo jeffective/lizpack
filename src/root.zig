@@ -147,9 +147,26 @@ test "decode struct" {
         0x02,
     };
 
+    const bad_bytes2: []const u8 = &.{
+        0b10000010, // map with two KV pairs
+        0b10100011, // fix str 3 char
+        'f',
+        'o',
+        'o',
+        0x03,
+        0b10100101, // fix str 5 char
+        'b',
+        'a',
+        'z',
+        'z',
+        'z',
+        0x02,
+    };
+
     try std.testing.expectEqualDeep(Foo{}, try decode(Foo, bytes));
     try std.testing.expectEqualDeep(Foo2{}, try decode(Foo2, bytes));
     try std.testing.expectError(error.Invalid, decode(Foo2, bad_bytes));
+    try std.testing.expectError(error.Invalid, decode(Foo2, bad_bytes2));
 }
 
 fn decodeOptional(comptime T: type, fbs: *FBS) !T {

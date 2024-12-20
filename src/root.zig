@@ -66,8 +66,6 @@ test "largest field name length" {
     try std.testing.expectEqual(4, largestFieldNameLength(Foo));
 }
 
-test {}
-
 fn decodeStruct(comptime T: type, fbs: *FBS) !T {
     const reader = fbs.reader();
     const format = Spec.Format.decode(try reader.readByte());

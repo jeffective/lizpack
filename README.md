@@ -1,2 +1,3 @@
-# msgpack-zig
+# lizpack
+
 A MessagePack Library for Zig

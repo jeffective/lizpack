@@ -2,6 +2,32 @@
 
 A MessagePack Library for Zig
 
+1. Zero allocations.
+1. Simple control flow.
+1. All messages validated for you.
+
+A simple API:
+
+```zig
+pub fn encode(value: anytype, out: []u8) error{NoSpaceLeft}![]u8 {...}
+
+pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {...}
+```
+
+Combines with your definition of your message structure:
+
+```zig
+const CustomerComplaint = struct {
+    user_id: u64,
+    status: enum(u8) {
+        received,
+        reviewed,
+        awaiting_response,
+        finished,
+    },
+};
+```
+
 | Zig Type         | Encodes As MessagePack Type                                          | Decodes From MessagePack Type                             |
 | ---------------- | -------------------------------------------------------------------- | --------------------------------------------------------- |
 | `bool`           | bool                                                                 | bool                                                      |
@@ -70,3 +96,8 @@ And import the library to begin using it:
 ```zig
 const lizpack = @import("lizpack");
 ```
+
+## Coming Soon
+
+1. Explicit allocation to support variable length and large messages (slices and pointers).
+1. Customization of encoding / decoding (structs as arrays instead of maps, enums as strings, etc.).

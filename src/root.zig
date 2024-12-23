@@ -19,7 +19,11 @@ pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {
 
 // pub fn decodeAlloc(comptime T: type, in: []const u8, allocator: std.mem.Allocator) error{ OutOfMemory, Invalid }!T {}
 
-// pub fn decodeAnyAlloc(comptime T: type, in: []const u8, allocator: str.mem.Allocator) !T {}
+// pub fn decodeAnyAlloc(comptime T: type, in: []const u8, allocator: std.mem.Allocator) !T {
+//     switch (@typeInfo(T)) {
+//         .
+//     }
+// }
 
 test "byte stream too long returns error" {
     try std.testing.expectError(error.Invalid, decode(bool, &.{ 0xc3, 0x00 }));

@@ -6,13 +6,13 @@ pub const Spec = @import("Specification.zig");
 
 pub fn encode(value: anytype, out: []u8) ![]u8 {
     var fbs = std.io.fixedBufferStream(out);
-    try encodeFbs(value, fbs.writer(), fbs.seekableStream());
+    try encodeAny(value, fbs.writer(), fbs.seekableStream());
     return fbs.getWritten();
 }
 
 pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {
     var fbs = std.io.fixedBufferStream(in);
-    const res = decodeFbs(T, fbs.reader(), fbs.seekableStream()) catch return error.Invalid;
+    const res = decodeAny(T, fbs.reader(), fbs.seekableStream()) catch return error.Invalid;
     if (fbs.pos != fbs.buffer.len) return error.Invalid;
     return res;
 }
@@ -21,7 +21,7 @@ test "byte stream too long returns error" {
     try std.testing.expectError(error.Invalid, decode(bool, &.{ 0xc3, 0x00 }));
 }
 
-fn encodeFbs(value: anytype, writer: anytype, seeker: anytype) !void {
+fn encodeAny(value: anytype, writer: anytype, seeker: anytype) !void {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .bool => return try encodeBool(value, writer),
@@ -46,7 +46,7 @@ fn encodeFbs(value: anytype, writer: anytype, seeker: anytype) !void {
 //     inline for (tag_names) |tag_name| {
 //         if (std.meta.eql(tag_name, active_tag_name)) {
 //             const union_payload = @field(value, active_tag_name);
-//             try encodeFbs(union_payload, fbs);
+//             try encodeAny(union_payload, fbs);
 //         }
 //     } else unreachable;
 // }
@@ -106,7 +106,7 @@ fn encodeStruct(value: anytype, writer: anytype, seeker: anytype) !void {
             else => unreachable,
         }
         try writer.writeAll(field_name);
-        try encodeFbs(@field(value, field_name), writer, seeker);
+        try encodeAny(@field(value, field_name), writer, seeker);
     }
 }
 
@@ -134,7 +134,7 @@ fn encodeVector(value: anytype, writer: anytype, seeker: anytype) !void {
         else => unreachable,
     }
     for (0..encoded_len) |i| {
-        try encodeFbs(value[i], writer, seeker);
+        try encodeAny(value[i], writer, seeker);
     }
 }
 
@@ -147,7 +147,7 @@ test "round trip vector" {
 
 fn encodeOptional(value: anytype, writer: anytype, seeker: anytype) !void {
     if (value) |non_null| {
-        try encodeFbs(non_null, writer, seeker);
+        try encodeAny(non_null, writer, seeker);
     } else {
         const format = Spec.Format{ .nil = {} };
         try writer.writeByte(format.encode());
@@ -186,12 +186,12 @@ fn encodeArray(value: anytype, writer: anytype, seeker: anytype) !void {
         else => unreachable,
     }
     for (value) |value_child| {
-        try encodeFbs(value_child, writer, seeker);
+        try encodeAny(value_child, writer, seeker);
     }
     const Child = @typeInfo(@TypeOf(value)).array.child;
     if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
         const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-        try encodeFbs(sentinel_value, writer, seeker);
+        try encodeAny(sentinel_value, writer, seeker);
     }
 }
 
@@ -307,7 +307,7 @@ test "roundtrip bool" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
 }
 
-fn decodeFbs(comptime T: type, reader: anytype, seeker: anytype) !T {
+fn decodeAny(comptime T: type, reader: anytype, seeker: anytype) !T {
     switch (@typeInfo(T)) {
         .bool => return try decodeBool(reader),
         .int => return try decodeInt(T, reader),
@@ -330,7 +330,7 @@ fn decodeFbs(comptime T: type, reader: anytype, seeker: anytype) !T {
 //     _ = @typeInfo(T).@"union".tag_type orelse @compileError("Unions require a tag type.");
 //     const starting_position = try fbs.getPos();
 //     const rval = rval: inline for (comptime std.meta.fields(T)) |union_field| {
-//         const res = decodeFbs(union_field.type, fbs) catch |err| switch (err) {
+//         const res = decodeAny(union_field.type, fbs) catch |err| switch (err) {
 //             error.Invalid, error.EndOfStream => |err2| blk: {
 //                 try fbs.seekTo(starting_position);
 //                 break :blk err2;
@@ -433,7 +433,7 @@ fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype) !T {
         try reader.readNoEof(field_name_buffer[0..name_len]);
         inline for (comptime std.meta.fieldNames(T), 0..) |field_name, i| {
             if (std.mem.eql(u8, field_name, field_name_buffer[0..name_len])) {
-                @field(res, field_name) = try decodeFbs(@FieldType(T, field_name), reader, seeker);
+                @field(res, field_name) = try decodeAny(@FieldType(T, field_name), reader, seeker);
                 got_field[i] = true;
             }
         }
@@ -511,7 +511,7 @@ fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype) !T {
         else => {
             // need to recover last byte we just consumed parsing the format.
             try seeker.seekBy(-1);
-            return try decodeFbs(Child, reader, seeker);
+            return try decodeAny(Child, reader, seeker);
         },
     }
 }
@@ -543,7 +543,7 @@ fn decodeVector(comptime T: type, reader: anytype, seeker: anytype) error{ Inval
     var res: T = undefined;
     const Child = @typeInfo(T).vector.child;
     for (0..expected_format_len) |i| {
-        res[i] = try decodeFbs(Child, reader, seeker);
+        res[i] = try decodeAny(Child, reader, seeker);
     }
     return res;
 }
@@ -577,11 +577,11 @@ fn decodeArray(comptime T: type, reader: anytype, seeker: anytype) error{ Invali
 
     const decode_len = @typeInfo(T).array.len;
     for (0..decode_len) |i| {
-        res[i] = try decodeFbs(Child, reader, seeker);
+        res[i] = try decodeAny(Child, reader, seeker);
     }
     if (@typeInfo(T).array.sentinel) |sentinel| {
         const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-        if (try decodeFbs(Child, reader, seeker) != sentinel_value) return error.Invalid;
+        if (try decodeAny(Child, reader, seeker) != sentinel_value) return error.Invalid;
     }
     return res;
 }

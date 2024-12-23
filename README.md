@@ -28,21 +28,21 @@ const CustomerComplaint = struct {
 };
 ```
 
-| Zig Type         | Encodes As MessagePack Type                                          | Decodes From MessagePack Type                             |
-| ---------------- | -------------------------------------------------------------------- | --------------------------------------------------------- |
-| `bool`           | bool                                                                 | bool                                                      |
-| `null`           | nil                                                                  | nil                                                       |
-| `u3`,`u45`, `i6` | integer                                                              | integer                                                   |
-| `?T`             | nil or T                                                             | nil or T                                                  |
-| `enum`           | integer                                                              | integer                                                   |
-| `[N]T`           | N length array of T                                                  | N length array of T                                       |
-| `[N:x]T`         | N+1 length array of T ending in x                                    | N+1 length array of T ending in x                         |
-| `@Vector(N, T)`  | N length array of T                                                  | N length array of T                                       |
-| `struct`         | map, keys are fields (orded by declaration), values are field values | map, keys are fields (unordered), values are field values |
-| `union (enum)`   | active field                                                         | first successful field (ordered by declaration)           |
-| `union`          | not yet supported                                                    | not yet supported                                         |
-| `[]T`            | not yet supported                                                    | not yet supported                                         |
-| `*T`             | not yet supported                                                    | not yet supported                                         |
+| Zig Type         | Encodes As MessagePack Type                                               | Decodes From MessagePack Type                                  |
+| ---------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `bool`           | bool                                                                      | bool                                                           |
+| `null`           | nil                                                                       | nil                                                            |
+| `u3`,`u45`, `i6` | integer                                                                   | integer                                                        |
+| `?T`             | nil or T                                                                  | nil or T                                                       |
+| `enum`           | integer                                                                   | integer                                                        |
+| `[N]T`           | N length array of T                                                       | N length array of T                                            |
+| `[N:x]T`         | N+1 length array of T ending in x                                         | N+1 length array of T ending in x                              |
+| `@Vector(N, T)`  | N length array of T                                                       | N length array of T                                            |
+| `struct`         | map, keys are field names (orded by declaration), values are field values | map, keys are field names (unordered), values are field values |
+| `union (enum)`   | active field                                                              | first successful field (ordered by declaration)                |
+| `union`          | not yet supported                                                         | not yet supported                                              |
+| `[]T`            | not yet supported                                                         | not yet supported                                              |
+| `*T`             | not yet supported                                                         | not yet supported                                              |
 
 ## Examples
 

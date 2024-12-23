@@ -4,14 +4,10 @@ const cast = std.math.cast;
 
 pub const Spec = @import("Specification.zig");
 
-pub fn encode(value: anytype, out: []u8) !void {
+pub fn encode(value: anytype, out: []u8) ![]u8 {
     var fbs = std.io.fixedBufferStream(out);
-    const writer = fbs.writer();
-    switch (@typeInfo(@TypeOf(value))) {
-        .void => unreachable,
-        .null => try writer.writeByte(0xc0),
-        else => @compileError("not implemented"),
-    }
+    try encodeFbs(value, &fbs);
+    return fbs.getWritten();
 }
 
 pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {
@@ -25,13 +21,93 @@ test "byte stream too long returns error" {
     try std.testing.expectError(error.Invalid, decode(bool, &.{ 0xc3, 0x00 }));
 }
 
-// fn encodeFbs(comptime T: type, fbs: *FBS) !T {
-//     switch (@typeInfo(T)) {
-//         .bool => return try encodeBool(fbs),
-//         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
-//     }
-//     unreachable;
-// }
+fn encodeFbs(value: anytype, fbs: *VarFBS) !void {
+    const T = @TypeOf(value);
+    switch (@typeInfo(T)) {
+        .bool => return try encodeBool(value, fbs),
+        .int => return try encodeInt(value, fbs),
+        else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
+    }
+    unreachable;
+}
+
+// TODO: use smallest message pack int regardless of type
+fn encodeInt(value: anytype, fbs: *VarFBS) !void {
+    const T = @TypeOf(value);
+    const writer = fbs.writer();
+    const format: Spec.Format = switch (@typeInfo(T).int.signedness) {
+        .unsigned => switch (@typeInfo(T).int.bits) {
+            0 => @compileError("MessagePack does not support zero bit integers."),
+            1...7 => .{ .positive_fixint = .{ .value = value } },
+            8 => .{.uint_8},
+            9...16 => .{.uint_16},
+            17...32 => .{.uint_32},
+            33...64 => .{.uint_64},
+            else => @compileError("MessagePack only supports up to 64 bit integers."),
+        },
+        .signed => switch (@typeInfo(T).int.bits) {
+            0 => @compileError("MessagePack does not support zero bit integers."),
+            1...7 => blk: {
+                if (value >= 0) {
+                    break :blk .{ .positive_fixint = .{ .value = @intCast(value) } };
+                } else if (value >= -32) {
+                    break :blk .{ .negative_fixint = .{ .value = value } };
+                } else {
+                    break :blk .{ .int_8 = {} };
+                }
+            },
+            8 => .{ .int_8 = {} },
+            9...16 => .{ .int_16 = {} },
+            17...32 => .{ .int_32 = {} },
+            33...64 => .{ .int_64 = {} },
+            else => @compileError("MessagePack only supports up to 64 bit integers."),
+        },
+    };
+    try writer.writeByte(format.encode());
+    switch (format) {
+        .positive_fixint, .negative_fixint => {},
+        .uint_8 => try writer.writeInt(u8, @intCast(value), .big),
+        .uint_16 => try writer.writeInt(u16, @intCast(value), .big),
+        .uint_32 => try writer.writeInt(u32, @intCast(value), .big),
+        .uint_64 => try writer.writeInt(u64, @intCast(value), .big),
+        .int_8 => try writer.writeInt(i8, @intCast(value), .big),
+        .int_16 => try writer.writeInt(i16, @intCast(value), .big),
+        .int_32 => try writer.writeInt(i32, @intCast(value), .big),
+        .int_64 => try writer.writeInt(i64, @intCast(value), .big),
+        else => unreachable,
+    }
+}
+
+test "encode int" {
+    var out1: [1]u8 = undefined;
+    try std.testing.expectEqualSlices(u8, &.{0x00}, try encode(@as(u5, 0), &out1));
+    try std.testing.expectEqualSlices(u8, &.{0xFF}, try encode(@as(i5, -1), &out1));
+    try std.testing.expectEqualSlices(u8, &.{0xE0}, try encode(@as(i6, -32), &out1));
+}
+
+fn encodeBool(value: anytype, fbs: *VarFBS) !void {
+    const writer = fbs.writer();
+    if (value) {
+        const format = Spec.Format{ .true = void{} };
+        try writer.writeByte(format.encode());
+    } else {
+        const format = Spec.Format{ .false = void{} };
+        try writer.writeByte(format.encode());
+    }
+}
+
+test "encode bool" {
+    var out: [1]u8 = undefined;
+    try std.testing.expectEqualSlices(u8, &.{0xc3}, try encode(true, &out));
+    try std.testing.expectEqualSlices(u8, &.{0xc2}, try encode(false, &out));
+}
+
+test "roundtrip bool" {
+    var out: [64]u8 = undefined;
+    const expected = true;
+    const slice = try encode(expected, &out);
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
 
 fn decodeFbs(comptime T: type, fbs: *FBS) !T {
     switch (@typeInfo(T)) {
@@ -50,7 +126,8 @@ fn decodeFbs(comptime T: type, fbs: *FBS) !T {
     unreachable;
 }
 
-// TODO: refactor this to make it less garbage
+// TODO: refactor this to make it less garbage when inline for loops can have continue.
+// https://github.com/ziglang/zig/issues/9524
 fn decodeUnion(comptime T: type, fbs: *FBS) !T {
     _ = @typeInfo(T).@"union".tag_type orelse @compileError("Unions require a tag type.");
     const starting_position = try fbs.getPos();
@@ -325,6 +402,7 @@ test "decode array senstinel" {
 }
 
 const FBS = std.io.FixedBufferStream([]const u8);
+const VarFBS = std.io.FixedBufferStream([]u8);
 
 fn decodeBool(fbs: *FBS) error{ Invalid, EndOfStream }!bool {
     const reader = fbs.reader();
@@ -357,7 +435,7 @@ fn decodeInt(comptime T: type, fbs: *FBS) error{ Invalid, EndOfStream }!T {
         .int_16 => return cast(T, try reader.readInt(i16, .big)) orelse return error.Invalid,
         .int_32 => return cast(T, try reader.readInt(i32, .big)) orelse return error.Invalid,
         .int_64 => return cast(T, try reader.readInt(u8, .big)) orelse return error.Invalid,
-        .negative_fixint => |val| return std.math.cast(T, -@as(i6, val.negative_value)) orelse return error.Invalid,
+        .negative_fixint => |val| return std.math.cast(T, val.value) orelse return error.Invalid,
         else => return error.Invalid,
     }
     unreachable;
@@ -369,7 +447,7 @@ test "decode int" {
     try std.testing.expectEqual(@as(u5, 0), decode(u5, &.{0x00}));
     try std.testing.expectEqual(@as(u5, 3), decode(u5, &.{0x03}));
     try std.testing.expectEqual(@as(i5, 0), decode(i5, &.{0x00}));
-    try std.testing.expectEqual(@as(i5, -3), decode(i5, &.{0b11100011}));
+    try std.testing.expectEqual(@as(i5, -1), decode(i5, &.{0xff}));
     try std.testing.expectError(error.Invalid, decode(i5, &.{0xb3}));
 }
 

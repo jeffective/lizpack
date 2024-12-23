@@ -3,6 +3,7 @@
 //! Ref: https://github.com/msgpack/msgpack/blob/master/spec.md
 
 const std = @import("std");
+const assert = std.debug.assert;
 
 pub const Format = union(enum) {
     positive_fixint: packed struct(u8) {
@@ -53,9 +54,8 @@ pub const Format = union(enum) {
     array_32,
     map_16,
     map_32,
-    negative_fixint: packed struct {
-        negative_value: u5,
-        _reserved: u3 = 0b111,
+    negative_fixint: packed struct(u8) {
+        value: i8,
     },
 
     pub fn decode(byte: u8) Format {
@@ -98,6 +98,52 @@ pub const Format = union(enum) {
             0xdf => return .map_32,
             0xe0...0xff => return .{ .negative_fixint = @bitCast(byte) },
         }
+    }
+
+    pub fn encode(self: Format) u8 {
+        return switch (self) {
+            .positive_fixint => |format| @bitCast(format),
+            .fixmap => |format| @bitCast(format),
+            .fixarray => |format| @bitCast(format),
+            .fixstr => |format| @bitCast(format),
+            .nil => 0xc0,
+            .never_used => 0xc1, // TODO: mark unreachable?
+            .false => 0xc2,
+            .true => 0xc3,
+            .bin_8 => 0xc4,
+            .bin_16 => 0xc5,
+            .bin_32 => 0xc6,
+            .ext_8 => 0xc7,
+            .ext_16 => 0xc8,
+            .ext_32 => 0xc9,
+            .float_32 => 0xca,
+            .float_64 => 0xcb,
+            .uint_8 => 0xcc,
+            .uint_16 => 0xcd,
+            .uint_32 => 0xce,
+            .uint_64 => 0xcf,
+            .int_8 => 0xd0,
+            .int_16 => 0xd1,
+            .int_32 => 0xd2,
+            .int_64 => 0xd3,
+            .fixext_1 => 0xd4,
+            .fixext_2 => 0xd5,
+            .fixext_4 => 0xd6,
+            .fixext_8 => 0xd7,
+            .fixext_16 => 0xd8,
+            .str_8 => 0xd9,
+            .str_16 => 0xda,
+            .str_32 => 0xdb,
+            .array_16 => 0xdc,
+            .array_32 => 0xdd,
+            .map_16 => 0xde,
+            .map_32 => 0xdf,
+            .negative_fixint => |format| blk: {
+                assert(format.value < 0);
+                assert(format.value > -33);
+                break :blk @bitCast(format);
+            },
+        };
     }
 };
 

@@ -4,7 +4,7 @@ const cast = std.math.cast;
 
 pub const Spec = @import("Specification.zig");
 
-pub fn encode(value: anytype, out: []u8) ![]u8 {
+pub fn encode(value: anytype, out: []u8) error{NoSpaceLeft}![]u8 {
     var fbs = std.io.fixedBufferStream(out);
     try encodeAny(value, fbs.writer(), fbs.seekableStream());
     return fbs.getWritten();
@@ -16,6 +16,10 @@ pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {
     if (fbs.pos != fbs.buffer.len) return error.Invalid;
     return res;
 }
+
+// pub fn decodeAlloc(comptime T: type, in: []const u8, allocator: std.mem.Allocator) error{ OutOfMemory, Invalid }!T {}
+
+// pub fn decodeAnyAlloc(comptime T: type, in: []const u8, allocator: str.mem.Allocator) !T {}
 
 test "byte stream too long returns error" {
     try std.testing.expectError(error.Invalid, decode(bool, &.{ 0xc3, 0x00 }));
@@ -32,31 +36,25 @@ fn encodeAny(value: anytype, writer: anytype, seeker: anytype) !void {
         .vector => return try encodeVector(value, writer, seeker),
         .@"struct" => return try encodeStruct(value, writer, seeker),
         .@"enum" => return try encodeEnum(value, writer),
-        // .@"union" => return try encodeUnion(value, fbs),
+        .@"union" => return try encodeUnion(value, writer, seeker),
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
     }
     unreachable;
 }
 
-// fn encodeUnion(value: anytype, fbs: *VarFBS) !void {
-//     const active_tag = std.meta.activeTag(value);
-//     const tag_type = @typeInfo(@TypeOf(value)).@"union".tag_type.?;
-//     const tag_names = std.meta.tags(tag_type);
-//     const active_tag_name = std.enums.tagName(tag_type, active_tag).?;
-//     inline for (tag_names) |tag_name| {
-//         if (std.meta.eql(tag_name, active_tag_name)) {
-//             const union_payload = @field(value, active_tag_name);
-//             try encodeAny(union_payload, fbs);
-//         }
-//     } else unreachable;
-// }
+fn encodeUnion(value: anytype, writer: anytype, seeker: anytype) !void {
+    const union_payload = switch (value) {
+        inline else => |payload| payload,
+    };
+    try encodeAny(union_payload, writer, seeker);
+}
 
-// test "round trip union" {
-//     var out: [1000]u8 = undefined;
-//     const expected: union(enum) { foo: u8, bar: u16 } = .{ .foo = 3 };
-//     const slice = try encode(expected, &out);
-//     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
-// }
+test "round trip union" {
+    var out: [1000]u8 = undefined;
+    const expected: union(enum) { foo: u8, bar: u16 } = .{ .foo = 3 };
+    const slice = try encode(expected, &out);
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
 
 fn encodeEnum(value: anytype, writer: anytype) !void {
     const TagInt = @typeInfo(@TypeOf(value)).@"enum".tag_type;
@@ -317,7 +315,7 @@ fn decodeAny(comptime T: type, reader: anytype, seeker: anytype) !T {
         .vector => return try decodeVector(T, reader, seeker),
         .@"struct" => return try decodeStruct(T, reader, seeker),
         .@"enum" => return try decodeEnum(T, reader),
-        // .@"union" => return try decodeUnion(T, fbs),
+        .@"union" => return try decodeUnion(T, reader, seeker),
 
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
     }
@@ -326,37 +324,37 @@ fn decodeAny(comptime T: type, reader: anytype, seeker: anytype) !T {
 
 // TODO: refactor this to make it less garbage when inline for loops can have continue.
 // https://github.com/ziglang/zig/issues/9524
-// fn decodeUnion(comptime T: type, fbs: *FBS) !T {
-//     _ = @typeInfo(T).@"union".tag_type orelse @compileError("Unions require a tag type.");
-//     const starting_position = try fbs.getPos();
-//     const rval = rval: inline for (comptime std.meta.fields(T)) |union_field| {
-//         const res = decodeAny(union_field.type, fbs) catch |err| switch (err) {
-//             error.Invalid, error.EndOfStream => |err2| blk: {
-//                 try fbs.seekTo(starting_position);
-//                 break :blk err2;
-//             },
-//         };
-//         if (res) |good_res| {
-//             break :rval @unionInit(T, union_field.name, good_res);
-//         } else |err| switch (err) {
-//             error.Invalid, error.EndOfStream => {},
-//         }
-//     } else {
-//         return error.Invalid;
-//     };
-//     return rval;
-// }
+fn decodeUnion(comptime T: type, reader: anytype, seeker: anytype) !T {
+    _ = @typeInfo(T).@"union".tag_type orelse @compileError("Unions require a tag type.");
+    const starting_position = try seeker.getPos();
+    const rval = rval: inline for (comptime std.meta.fields(T)) |union_field| {
+        const res = decodeAny(union_field.type, reader, seeker) catch |err| switch (err) {
+            error.Invalid, error.EndOfStream => |err2| blk: {
+                try seeker.seekTo(starting_position);
+                break :blk err2;
+            },
+        };
+        if (res) |good_res| {
+            break :rval @unionInit(T, union_field.name, good_res);
+        } else |err| switch (err) {
+            error.Invalid, error.EndOfStream => {},
+        }
+    } else {
+        return error.Invalid;
+    };
+    return rval;
+}
 
-// test "decode union" {
-//     const MyUnion = union(enum) {
-//         my_u8: u8,
-//         my_bool: bool,
-//     };
+test "decode union" {
+    const MyUnion = union(enum) {
+        my_u8: u8,
+        my_bool: bool,
+    };
 
-//     try std.testing.expectEqual(MyUnion{ .my_bool = false }, try decode(MyUnion, &.{0xc2}));
-//     try std.testing.expectEqual(MyUnion{ .my_u8 = 0 }, try decode(MyUnion, &.{0x00}));
-//     try std.testing.expectError(error.Invalid, decode(MyUnion, &.{0xc4}));
-// }
+    try std.testing.expectEqual(MyUnion{ .my_bool = false }, try decode(MyUnion, &.{0xc2}));
+    try std.testing.expectEqual(MyUnion{ .my_u8 = 0 }, try decode(MyUnion, &.{0x00}));
+    try std.testing.expectError(error.Invalid, decode(MyUnion, &.{0xc4}));
+}
 
 fn decodeEnum(comptime T: type, reader: anytype) !T {
     const TagInt = @typeInfo(T).@"enum".tag_type;

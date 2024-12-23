@@ -47,6 +47,7 @@ fn encodeAny(value: anytype, writer: anytype, seeker: anytype) !void {
 }
 
 fn encodeUnion(value: anytype, writer: anytype, seeker: anytype) !void {
+    _ = @typeInfo(@TypeOf(value)).@"union".tag_type orelse @compileError("Unions require a tag type.");
     const union_payload = switch (value) {
         inline else => |payload| payload,
     };

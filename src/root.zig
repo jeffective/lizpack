@@ -1,8 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const testing = std.testing;
 const cast = std.math.cast;
-const myType = std.builtin.Type;
 
 pub const Spec = @import("Specification.zig");
 
@@ -16,9 +14,9 @@ pub fn encode(value: anytype, out: []u8) !void {
     }
 }
 
-pub fn decode(comptime T: type, in: []const u8) !T {
+pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {
     var fbs = std.io.fixedBufferStream(in);
-    const res = try decodeFbs(T, &fbs);
+    const res = decodeFbs(T, &fbs) catch return error.Invalid;
     if (fbs.pos != fbs.buffer.len) return error.Invalid;
     return res;
 }
@@ -27,9 +25,16 @@ test "byte stream too long returns error" {
     try std.testing.expectError(error.Invalid, decode(bool, &.{ 0xc3, 0x00 }));
 }
 
+// fn encodeFbs(comptime T: type, fbs: *FBS) !T {
+//     switch (@typeInfo(T)) {
+//         .bool => return try encodeBool(fbs),
+//         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
+//     }
+//     unreachable;
+// }
+
 fn decodeFbs(comptime T: type, fbs: *FBS) !T {
     switch (@typeInfo(T)) {
-        .void => unreachable,
         .bool => return try decodeBool(fbs),
         .int => return try decodeInt(T, fbs),
         .float => return try decodeFloat(T, fbs),
@@ -37,9 +42,63 @@ fn decodeFbs(comptime T: type, fbs: *FBS) !T {
         .optional => return try decodeOptional(T, fbs),
         .vector => return try decodeVector(T, fbs),
         .@"struct" => return try decodeStruct(T, fbs),
+        .@"enum" => return try decodeEnum(T, fbs),
+        .@"union" => return try decodeUnion(T, fbs),
+
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
     }
     unreachable;
+}
+
+// TODO: refactor this to make it less garbage
+fn decodeUnion(comptime T: type, fbs: *FBS) !T {
+    _ = @typeInfo(T).@"union".tag_type orelse @compileError("Unions require a tag type.");
+    const starting_position = try fbs.getPos();
+    const rval = rval: inline for (comptime std.meta.fields(T)) |union_field| {
+        const res = decodeFbs(union_field.type, fbs) catch |err| switch (err) {
+            error.Invalid, error.EndOfStream => |err2| blk: {
+                try fbs.seekTo(starting_position);
+                break :blk err2;
+            },
+        };
+        if (res) |good_res| {
+            break :rval @unionInit(T, union_field.name, good_res);
+        } else |err| switch (err) {
+            error.Invalid, error.EndOfStream => {},
+        }
+    } else {
+        return error.Invalid;
+    };
+    return rval;
+}
+
+test "decode union" {
+    const MyUnion = union(enum) {
+        my_u8: u8,
+        my_bool: bool,
+    };
+
+    try std.testing.expectEqual(MyUnion{ .my_bool = false }, try decode(MyUnion, &.{0xc2}));
+    try std.testing.expectEqual(MyUnion{ .my_u8 = 0 }, try decode(MyUnion, &.{0x00}));
+    try std.testing.expectError(error.Invalid, decode(MyUnion, &.{0xc4}));
+}
+
+fn decodeEnum(comptime T: type, fbs: *FBS) !T {
+    const TagInt = @typeInfo(T).@"enum".tag_type;
+    const int: TagInt = try decodeInt(TagInt, fbs);
+    const res = std.meta.intToEnum(T, int) catch |err| switch (err) {
+        error.InvalidEnumTag => return error.Invalid,
+    };
+    return res;
+}
+
+test "decode enum" {
+    const TestEnum = enum {
+        foo,
+        bar,
+    };
+    try std.testing.expectEqual(TestEnum.foo, decode(TestEnum, &.{0x00}));
+    try std.testing.expectEqual(TestEnum.bar, decode(TestEnum, &.{0x01}));
 }
 
 fn largestFieldNameLength(comptime T: type) comptime_int {
@@ -287,6 +346,7 @@ test "decode bool" {
 fn decodeInt(comptime T: type, fbs: *FBS) error{ Invalid, EndOfStream }!T {
     const reader = fbs.reader();
     const format = Spec.Format.decode(try reader.readByte());
+    if (@typeInfo(T).int.bits > 64) @compileError("message pack does not support integers larger than 64 bits.");
     switch (format) {
         .positive_fixint => |val| return std.math.cast(T, val.value) orelse return error.Invalid,
         .uint_8 => return cast(T, try reader.readInt(u8, .big)) orelse return error.Invalid,

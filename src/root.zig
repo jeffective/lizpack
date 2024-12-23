@@ -6,13 +6,13 @@ pub const Spec = @import("Specification.zig");
 
 pub fn encode(value: anytype, out: []u8) ![]u8 {
     var fbs = std.io.fixedBufferStream(out);
-    try encodeFbs(value, &fbs);
+    try encodeFbs(value, fbs.writer(), fbs.seekableStream());
     return fbs.getWritten();
 }
 
 pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {
     var fbs = std.io.fixedBufferStream(in);
-    const res = decodeFbs(T, &fbs) catch return error.Invalid;
+    const res = decodeFbs(T, fbs.reader(), fbs.seekableStream()) catch return error.Invalid;
     if (fbs.pos != fbs.buffer.len) return error.Invalid;
     return res;
 }
@@ -21,17 +21,17 @@ test "byte stream too long returns error" {
     try std.testing.expectError(error.Invalid, decode(bool, &.{ 0xc3, 0x00 }));
 }
 
-fn encodeFbs(value: anytype, fbs: *VarFBS) !void {
+fn encodeFbs(value: anytype, writer: anytype, seeker: anytype) !void {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
-        .bool => return try encodeBool(value, fbs),
-        .int => return try encodeInt(value, fbs),
-        .float => return try encodeFloat(value, fbs),
-        .array => return try encodeArray(value, fbs),
-        .optional => return try encodeOptional(value, fbs),
-        .vector => return try encodeVector(value, fbs),
-        .@"struct" => return try encodeStruct(value, fbs),
-        .@"enum" => return try encodeEnum(value, fbs),
+        .bool => return try encodeBool(value, writer),
+        .int => return try encodeInt(value, writer),
+        .float => return try encodeFloat(value, writer),
+        .array => return try encodeArray(value, writer, seeker),
+        .optional => return try encodeOptional(value, writer, seeker),
+        .vector => return try encodeVector(value, writer, seeker),
+        .@"struct" => return try encodeStruct(value, writer, seeker),
+        .@"enum" => return try encodeEnum(value, writer),
         // .@"union" => return try encodeUnion(value, fbs),
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
     }
@@ -58,10 +58,10 @@ fn encodeFbs(value: anytype, fbs: *VarFBS) !void {
 //     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
 // }
 
-fn encodeEnum(value: anytype, fbs: *VarFBS) !void {
+fn encodeEnum(value: anytype, writer: anytype) !void {
     const TagInt = @typeInfo(@TypeOf(value)).@"enum".tag_type;
     const int: TagInt = @intFromEnum(value);
-    try encodeFbs(int, fbs);
+    try encodeInt(int, writer);
 }
 
 test "round trip enum" {
@@ -71,8 +71,7 @@ test "round trip enum" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
 }
 
-fn encodeStruct(value: anytype, fbs: *VarFBS) !void {
-    const writer = fbs.writer();
+fn encodeStruct(value: anytype, writer: anytype, seeker: anytype) !void {
     const num_struct_fields = @typeInfo(@TypeOf(value)).@"struct".fields.len;
 
     if (num_struct_fields == 0) return;
@@ -107,7 +106,7 @@ fn encodeStruct(value: anytype, fbs: *VarFBS) !void {
             else => unreachable,
         }
         try writer.writeAll(field_name);
-        try encodeFbs(@field(value, field_name), fbs);
+        try encodeFbs(@field(value, field_name), writer, seeker);
     }
 }
 
@@ -118,8 +117,7 @@ test "round trip struct" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
 }
 
-fn encodeVector(value: anytype, fbs: *VarFBS) !void {
-    const writer = fbs.writer();
+fn encodeVector(value: anytype, writer: anytype, seeker: anytype) !void {
     const encoded_len = @typeInfo(@TypeOf(value)).vector.len;
 
     const format: Spec.Format = switch (encoded_len) {
@@ -136,7 +134,7 @@ fn encodeVector(value: anytype, fbs: *VarFBS) !void {
         else => unreachable,
     }
     for (0..encoded_len) |i| {
-        try encodeFbs(value[i], fbs);
+        try encodeFbs(value[i], writer, seeker);
     }
 }
 
@@ -147,10 +145,9 @@ test "round trip vector" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
 }
 
-fn encodeOptional(value: anytype, fbs: *VarFBS) !void {
-    const writer = fbs.writer();
+fn encodeOptional(value: anytype, writer: anytype, seeker: anytype) !void {
     if (value) |non_null| {
-        try encodeFbs(non_null, fbs);
+        try encodeFbs(non_null, writer, seeker);
     } else {
         const format = Spec.Format{ .nil = {} };
         try writer.writeByte(format.encode());
@@ -171,8 +168,7 @@ test "round trip optional 2" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
 }
 
-fn encodeArray(value: anytype, fbs: *VarFBS) !void {
-    const writer = fbs.writer();
+fn encodeArray(value: anytype, writer: anytype, seeker: anytype) !void {
     const has_sentinel = @typeInfo(@TypeOf(value)).array.sentinel != null;
     const encoded_len = @typeInfo(@TypeOf(value)).array.len + @as(comptime_int, @intFromBool(has_sentinel));
 
@@ -190,12 +186,12 @@ fn encodeArray(value: anytype, fbs: *VarFBS) !void {
         else => unreachable,
     }
     for (value) |value_child| {
-        try encodeFbs(value_child, fbs);
+        try encodeFbs(value_child, writer, seeker);
     }
     const Child = @typeInfo(@TypeOf(value)).array.child;
     if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
         const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-        try encodeFbs(sentinel_value, fbs);
+        try encodeFbs(sentinel_value, writer, seeker);
     }
 }
 
@@ -206,8 +202,7 @@ test "round trip array" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
 }
 
-fn encodeFloat(value: anytype, fbs: *VarFBS) !void {
-    const writer = fbs.writer();
+fn encodeFloat(value: anytype, writer: anytype) !void {
     const format: Spec.Format = switch (@typeInfo(@TypeOf(value)).float.bits) {
         32 => .{ .float_32 = {} },
         64 => .{ .float_64 = {} },
@@ -236,9 +231,8 @@ test "round trip float 32" {
 }
 
 // TODO: maybe re-think this and use the smallest possible representation
-fn encodeInt(value: anytype, fbs: *VarFBS) !void {
+fn encodeInt(value: anytype, writer: anytype) !void {
     const T = @TypeOf(value);
-    const writer = fbs.writer();
 
     if (@typeInfo(T).int.bits > 64) @compileError("MessagePack only supports up to 64 bit integers.");
 
@@ -290,8 +284,7 @@ test "encode int" {
     try std.testing.expectEqualSlices(u8, &.{0xE0}, try encode(@as(i6, -32), &out1));
 }
 
-fn encodeBool(value: anytype, fbs: *VarFBS) !void {
-    const writer = fbs.writer();
+fn encodeBool(value: anytype, writer: anytype) !void {
     if (value) {
         const format = Spec.Format{ .true = void{} };
         try writer.writeByte(format.encode());
@@ -314,16 +307,16 @@ test "roundtrip bool" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
 }
 
-fn decodeFbs(comptime T: type, fbs: *FBS) !T {
+fn decodeFbs(comptime T: type, reader: anytype, seeker: anytype) !T {
     switch (@typeInfo(T)) {
-        .bool => return try decodeBool(fbs),
-        .int => return try decodeInt(T, fbs),
-        .float => return try decodeFloat(T, fbs),
-        .array => return try decodeArray(T, fbs),
-        .optional => return try decodeOptional(T, fbs),
-        .vector => return try decodeVector(T, fbs),
-        .@"struct" => return try decodeStruct(T, fbs),
-        .@"enum" => return try decodeEnum(T, fbs),
+        .bool => return try decodeBool(reader),
+        .int => return try decodeInt(T, reader),
+        .float => return try decodeFloat(T, reader),
+        .array => return try decodeArray(T, reader, seeker),
+        .optional => return try decodeOptional(T, reader, seeker),
+        .vector => return try decodeVector(T, reader, seeker),
+        .@"struct" => return try decodeStruct(T, reader, seeker),
+        .@"enum" => return try decodeEnum(T, reader),
         // .@"union" => return try decodeUnion(T, fbs),
 
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
@@ -365,9 +358,9 @@ fn decodeFbs(comptime T: type, fbs: *FBS) !T {
 //     try std.testing.expectError(error.Invalid, decode(MyUnion, &.{0xc4}));
 // }
 
-fn decodeEnum(comptime T: type, fbs: *FBS) !T {
+fn decodeEnum(comptime T: type, reader: anytype) !T {
     const TagInt = @typeInfo(T).@"enum".tag_type;
-    const int: TagInt = try decodeInt(TagInt, fbs);
+    const int: TagInt = try decodeInt(TagInt, reader);
     const res = std.meta.intToEnum(T, int) catch |err| switch (err) {
         error.InvalidEnumTag => return error.Invalid,
     };
@@ -407,8 +400,7 @@ test "largest field name length" {
     try std.testing.expectEqual(4, largestFieldNameLength(Foo));
 }
 
-fn decodeStruct(comptime T: type, fbs: *FBS) !T {
-    const reader = fbs.reader();
+fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype) !T {
     const format = Spec.Format.decode(try reader.readByte());
     const num_struct_fields = @typeInfo(T).@"struct".fields.len;
 
@@ -441,7 +433,7 @@ fn decodeStruct(comptime T: type, fbs: *FBS) !T {
         try reader.readNoEof(field_name_buffer[0..name_len]);
         inline for (comptime std.meta.fieldNames(T), 0..) |field_name, i| {
             if (std.mem.eql(u8, field_name, field_name_buffer[0..name_len])) {
-                @field(res, field_name) = try decodeFbs(@FieldType(T, field_name), fbs);
+                @field(res, field_name) = try decodeFbs(@FieldType(T, field_name), reader, seeker);
                 got_field[i] = true;
             }
         }
@@ -510,8 +502,7 @@ test "decode struct" {
     try std.testing.expectError(error.Invalid, decode(Foo2, bad_bytes2));
 }
 
-fn decodeOptional(comptime T: type, fbs: *FBS) !T {
-    const reader = fbs.reader();
+fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype) !T {
     const format = Spec.Format.decode(try reader.readByte());
 
     const Child = @typeInfo(T).optional.child;
@@ -519,8 +510,8 @@ fn decodeOptional(comptime T: type, fbs: *FBS) !T {
         .nil => return null,
         else => {
             // need to recover last byte we just consumed parsing the format.
-            try fbs.seekBy(-1);
-            return try decodeFbs(Child, fbs);
+            try seeker.seekBy(-1);
+            return try decodeFbs(Child, reader, seeker);
         },
     }
 }
@@ -530,8 +521,7 @@ test "decode optional" {
     try std.testing.expectEqual(@as(u8, 1), decode(?u8, &.{0x01}));
 }
 
-fn decodeVector(comptime T: type, fbs: *FBS) error{ Invalid, EndOfStream }!T {
-    const reader = fbs.reader();
+fn decodeVector(comptime T: type, reader: anytype, seeker: anytype) error{ Invalid, EndOfStream }!T {
     const format = Spec.Format.decode(try reader.readByte());
     const expected_format_len = @typeInfo(T).vector.len;
     switch (format) {
@@ -553,7 +543,7 @@ fn decodeVector(comptime T: type, fbs: *FBS) error{ Invalid, EndOfStream }!T {
     var res: T = undefined;
     const Child = @typeInfo(T).vector.child;
     for (0..expected_format_len) |i| {
-        res[i] = try decodeFbs(Child, fbs);
+        res[i] = try decodeFbs(Child, reader, seeker);
     }
     return res;
 }
@@ -562,8 +552,7 @@ test "decode vector" {
     try std.testing.expectEqual(@Vector(3, bool){ true, false, true }, decode(@Vector(3, bool), &.{ 0b10010011, 0xc3, 0xc2, 0xc3 }));
 }
 
-fn decodeArray(comptime T: type, fbs: *FBS) error{ Invalid, EndOfStream }!T {
-    const reader = fbs.reader();
+fn decodeArray(comptime T: type, reader: anytype, seeker: anytype) error{ Invalid, EndOfStream }!T {
     const format = Spec.Format.decode(try reader.readByte());
     comptime var expected_format_len = @typeInfo(T).array.len;
     if (@typeInfo(T).array.sentinel) |_| expected_format_len += 1;
@@ -588,11 +577,11 @@ fn decodeArray(comptime T: type, fbs: *FBS) error{ Invalid, EndOfStream }!T {
 
     const decode_len = @typeInfo(T).array.len;
     for (0..decode_len) |i| {
-        res[i] = try decodeFbs(Child, fbs);
+        res[i] = try decodeFbs(Child, reader, seeker);
     }
     if (@typeInfo(T).array.sentinel) |sentinel| {
         const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-        if (try decodeFbs(Child, fbs) != sentinel_value) return error.Invalid;
+        if (try decodeFbs(Child, reader, seeker) != sentinel_value) return error.Invalid;
     }
     return res;
 }
@@ -609,8 +598,7 @@ test "decode array senstinel" {
 const FBS = std.io.FixedBufferStream([]const u8);
 const VarFBS = std.io.FixedBufferStream([]u8);
 
-fn decodeBool(fbs: *FBS) error{ Invalid, EndOfStream }!bool {
-    const reader = fbs.reader();
+fn decodeBool(reader: anytype) error{ Invalid, EndOfStream }!bool {
     const format = Spec.Format.decode(try reader.readByte());
     switch (format) {
         .true => return true,
@@ -626,8 +614,7 @@ test "decode bool" {
     try std.testing.expectError(error.Invalid, decode(bool, &.{0xe3}));
 }
 
-fn decodeInt(comptime T: type, fbs: *FBS) error{ Invalid, EndOfStream }!T {
-    const reader = fbs.reader();
+fn decodeInt(comptime T: type, reader: anytype) error{ Invalid, EndOfStream }!T {
     const format = Spec.Format.decode(try reader.readByte());
     if (@typeInfo(T).int.bits > 64) @compileError("message pack does not support integers larger than 64 bits.");
     switch (format) {
@@ -656,8 +643,7 @@ test "decode int" {
     try std.testing.expectError(error.Invalid, decode(i5, &.{0xb3}));
 }
 
-fn decodeFloat(comptime T: type, fbs: *FBS) error{ Invalid, EndOfStream }!T {
-    const reader = fbs.reader();
+fn decodeFloat(comptime T: type, reader: anytype) error{ Invalid, EndOfStream }!T {
     const format = Spec.Format.decode(try reader.readByte());
     if (@typeInfo(T).float.bits == 32) {
         switch (format) {

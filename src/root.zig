@@ -26,28 +26,233 @@ fn encodeFbs(value: anytype, fbs: *VarFBS) !void {
     switch (@typeInfo(T)) {
         .bool => return try encodeBool(value, fbs),
         .int => return try encodeInt(value, fbs),
+        .float => return try encodeFloat(value, fbs),
+        .array => return try encodeArray(value, fbs),
+        .optional => return try encodeOptional(value, fbs),
+        .vector => return try encodeVector(value, fbs),
+        .@"struct" => return try encodeStruct(value, fbs),
+        .@"enum" => return try encodeEnum(value, fbs),
+        // .@"union" => return try encodeUnion(value, fbs),
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
     }
     unreachable;
 }
 
-// TODO: use smallest message pack int regardless of type
+// fn encodeUnion(value: anytype, fbs: *VarFBS) !void {
+//     const active_tag = std.meta.activeTag(value);
+//     const tag_type = @typeInfo(@TypeOf(value)).@"union".tag_type.?;
+//     const tag_names = std.meta.tags(tag_type);
+//     const active_tag_name = std.enums.tagName(tag_type, active_tag).?;
+//     inline for (tag_names) |tag_name| {
+//         if (std.meta.eql(tag_name, active_tag_name)) {
+//             const union_payload = @field(value, active_tag_name);
+//             try encodeFbs(union_payload, fbs);
+//         }
+//     } else unreachable;
+// }
+
+// test "round trip union" {
+//     var out: [1000]u8 = undefined;
+//     const expected: union(enum) { foo: u8, bar: u16 } = .{ .foo = 3 };
+//     const slice = try encode(expected, &out);
+//     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+// }
+
+fn encodeEnum(value: anytype, fbs: *VarFBS) !void {
+    const TagInt = @typeInfo(@TypeOf(value)).@"enum".tag_type;
+    const int: TagInt = @intFromEnum(value);
+    try encodeFbs(int, fbs);
+}
+
+test "round trip enum" {
+    var out: [1000]u8 = undefined;
+    const expected: enum { foo, bar } = .foo;
+    const slice = try encode(expected, &out);
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+fn encodeStruct(value: anytype, fbs: *VarFBS) !void {
+    const writer = fbs.writer();
+    const num_struct_fields = @typeInfo(@TypeOf(value)).@"struct".fields.len;
+
+    if (num_struct_fields == 0) return;
+
+    assert(num_struct_fields > 0);
+
+    const format: Spec.Format = switch (num_struct_fields) {
+        0 => unreachable,
+        1...std.math.maxInt(u4) => .{ .fixmap = .{ .n_elements = @intCast(num_struct_fields) } },
+        std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .map_16 = {} },
+        std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .map_32 = {} },
+        else => @compileError("MessagePack only supports up to u32 len maps."),
+    };
+
+    try writer.writeByte(format.encode());
+
+    inline for (comptime std.meta.fieldNames(@TypeOf(value))) |field_name| {
+        const format_key: Spec.Format = switch (field_name.len) {
+            0 => unreachable,
+            1...std.math.maxInt(u5) => |len| .{ .fixstr = .{ .len = @intCast(len) } },
+            std.math.maxInt(u5) + 1...std.math.maxInt(u8) => .{ .str_8 = {} },
+            std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .str_16 = {} },
+            std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .str_32 = {} },
+            else => @compileError("Field name" ++ field_name ++ " too long"),
+        };
+        try writer.writeByte(format_key.encode());
+        switch (format_key) {
+            .fixstr => {},
+            .str_8 => try writer.writeInt(u8, @intCast(field_name.len), .big),
+            .str_16 => try writer.writeInt(u16, @intCast(field_name.len), .big),
+            .str_32 => try writer.writeInt(u32, @intCast(field_name.len), .big),
+            else => unreachable,
+        }
+        try writer.writeAll(field_name);
+        try encodeFbs(@field(value, field_name), fbs);
+    }
+}
+
+test "round trip struct" {
+    var out: [1000]u8 = undefined;
+    const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
+    const slice = try encode(expected, &out);
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+fn encodeVector(value: anytype, fbs: *VarFBS) !void {
+    const writer = fbs.writer();
+    const encoded_len = @typeInfo(@TypeOf(value)).vector.len;
+
+    const format: Spec.Format = switch (encoded_len) {
+        0...std.math.maxInt(u4) => .{ .fixarray = .{ .len = encoded_len } },
+        std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
+        std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
+        else => @compileError("MessagePack only supports up to array length max u32."),
+    };
+    try writer.writeByte(format.encode());
+    switch (format) {
+        .fixarray => {},
+        .array_16 => try writer.writeInt(u16, encoded_len, .big),
+        .array_32 => try writer.writeInt(u32, encoded_len, .big),
+        else => unreachable,
+    }
+    for (0..encoded_len) |i| {
+        try encodeFbs(value[i], fbs);
+    }
+}
+
+test "round trip vector" {
+    var out: [356]u8 = undefined;
+    const expected: @Vector(56, u8) = @splat(34);
+    const slice = try encode(expected, &out);
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+fn encodeOptional(value: anytype, fbs: *VarFBS) !void {
+    const writer = fbs.writer();
+    if (value) |non_null| {
+        try encodeFbs(non_null, fbs);
+    } else {
+        const format = Spec.Format{ .nil = {} };
+        try writer.writeByte(format.encode());
+    }
+}
+
+test "round trip optional" {
+    var out: [64]u8 = undefined;
+    const expected: ?f64 = null;
+    const slice = try encode(expected, &out);
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+test "round trip optional 2" {
+    var out: [64]u8 = undefined;
+    const expected: ?f64 = 12.3;
+    const slice = try encode(expected, &out);
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+fn encodeArray(value: anytype, fbs: *VarFBS) !void {
+    const writer = fbs.writer();
+    const has_sentinel = @typeInfo(@TypeOf(value)).array.sentinel != null;
+    const encoded_len = @typeInfo(@TypeOf(value)).array.len + @as(comptime_int, @intFromBool(has_sentinel));
+
+    const format: Spec.Format = switch (encoded_len) {
+        0...std.math.maxInt(u4) => .{ .fixarray = .{ .len = encoded_len } },
+        std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
+        std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
+        else => @compileError("MessagePack only supports up to array length max u32."),
+    };
+    try writer.writeByte(format.encode());
+    switch (format) {
+        .fixarray => {},
+        .array_16 => try writer.writeInt(u16, encoded_len, .big),
+        .array_32 => try writer.writeInt(u32, encoded_len, .big),
+        else => unreachable,
+    }
+    for (value) |value_child| {
+        try encodeFbs(value_child, fbs);
+    }
+    const Child = @typeInfo(@TypeOf(value)).array.child;
+    if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
+        const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+        try encodeFbs(sentinel_value, fbs);
+    }
+}
+
+test "round trip array" {
+    var out: [64]u8 = undefined;
+    const expected: [3]bool = .{ true, false, true };
+    const slice = try encode(expected, &out);
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+fn encodeFloat(value: anytype, fbs: *VarFBS) !void {
+    const writer = fbs.writer();
+    const format: Spec.Format = switch (@typeInfo(@TypeOf(value)).float.bits) {
+        32 => .{ .float_32 = {} },
+        64 => .{ .float_64 = {} },
+        else => @compileError("MessagePack only supports 32 or 64 bit floats."),
+    };
+    try writer.writeByte(format.encode());
+    switch (format) {
+        .float_32 => try writer.writeInt(u32, @bitCast(value), .big),
+        .float_64 => try writer.writeInt(u64, @bitCast(value), .big),
+        else => unreachable,
+    }
+}
+
+test "round trip float 64" {
+    var out: [64]u8 = undefined;
+    const expected: f64 = 12.35;
+    const slice = try encode(expected, &out);
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+test "round trip float 32" {
+    var out: [64]u8 = undefined;
+    const expected: f32 = 12.35;
+    const slice = try encode(expected, &out);
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+// TODO: maybe re-think this and use the smallest possible representation
 fn encodeInt(value: anytype, fbs: *VarFBS) !void {
     const T = @TypeOf(value);
     const writer = fbs.writer();
+
+    if (@typeInfo(T).int.bits > 64) @compileError("MessagePack only supports up to 64 bit integers.");
+
     const format: Spec.Format = switch (@typeInfo(T).int.signedness) {
         .unsigned => switch (@typeInfo(T).int.bits) {
-            0 => @compileError("MessagePack does not support zero bit integers."),
-            1...7 => .{ .positive_fixint = .{ .value = value } },
-            8 => .{.uint_8},
-            9...16 => .{.uint_16},
-            17...32 => .{.uint_32},
-            33...64 => .{.uint_64},
-            else => @compileError("MessagePack only supports up to 64 bit integers."),
+            0...7 => .{ .positive_fixint = .{ .value = value } },
+            8 => .{ .uint_8 = {} },
+            9...16 => .{ .uint_16 = {} },
+            17...32 => .{ .uint_32 = {} },
+            33...64 => .{ .uint_64 = {} },
+            else => unreachable,
         },
         .signed => switch (@typeInfo(T).int.bits) {
-            0 => @compileError("MessagePack does not support zero bit integers."),
-            1...7 => blk: {
+            0...6 => blk: {
                 if (value >= 0) {
                     break :blk .{ .positive_fixint = .{ .value = @intCast(value) } };
                 } else if (value >= -32) {
@@ -56,11 +261,11 @@ fn encodeInt(value: anytype, fbs: *VarFBS) !void {
                     break :blk .{ .int_8 = {} };
                 }
             },
-            8 => .{ .int_8 = {} },
+            7...8 => .{ .int_8 = {} },
             9...16 => .{ .int_16 = {} },
             17...32 => .{ .int_32 = {} },
             33...64 => .{ .int_64 = {} },
-            else => @compileError("MessagePack only supports up to 64 bit integers."),
+            else => unreachable,
         },
     };
     try writer.writeByte(format.encode());
@@ -119,7 +324,7 @@ fn decodeFbs(comptime T: type, fbs: *FBS) !T {
         .vector => return try decodeVector(T, fbs),
         .@"struct" => return try decodeStruct(T, fbs),
         .@"enum" => return try decodeEnum(T, fbs),
-        .@"union" => return try decodeUnion(T, fbs),
+        // .@"union" => return try decodeUnion(T, fbs),
 
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
     }
@@ -128,37 +333,37 @@ fn decodeFbs(comptime T: type, fbs: *FBS) !T {
 
 // TODO: refactor this to make it less garbage when inline for loops can have continue.
 // https://github.com/ziglang/zig/issues/9524
-fn decodeUnion(comptime T: type, fbs: *FBS) !T {
-    _ = @typeInfo(T).@"union".tag_type orelse @compileError("Unions require a tag type.");
-    const starting_position = try fbs.getPos();
-    const rval = rval: inline for (comptime std.meta.fields(T)) |union_field| {
-        const res = decodeFbs(union_field.type, fbs) catch |err| switch (err) {
-            error.Invalid, error.EndOfStream => |err2| blk: {
-                try fbs.seekTo(starting_position);
-                break :blk err2;
-            },
-        };
-        if (res) |good_res| {
-            break :rval @unionInit(T, union_field.name, good_res);
-        } else |err| switch (err) {
-            error.Invalid, error.EndOfStream => {},
-        }
-    } else {
-        return error.Invalid;
-    };
-    return rval;
-}
+// fn decodeUnion(comptime T: type, fbs: *FBS) !T {
+//     _ = @typeInfo(T).@"union".tag_type orelse @compileError("Unions require a tag type.");
+//     const starting_position = try fbs.getPos();
+//     const rval = rval: inline for (comptime std.meta.fields(T)) |union_field| {
+//         const res = decodeFbs(union_field.type, fbs) catch |err| switch (err) {
+//             error.Invalid, error.EndOfStream => |err2| blk: {
+//                 try fbs.seekTo(starting_position);
+//                 break :blk err2;
+//             },
+//         };
+//         if (res) |good_res| {
+//             break :rval @unionInit(T, union_field.name, good_res);
+//         } else |err| switch (err) {
+//             error.Invalid, error.EndOfStream => {},
+//         }
+//     } else {
+//         return error.Invalid;
+//     };
+//     return rval;
+// }
 
-test "decode union" {
-    const MyUnion = union(enum) {
-        my_u8: u8,
-        my_bool: bool,
-    };
+// test "decode union" {
+//     const MyUnion = union(enum) {
+//         my_u8: u8,
+//         my_bool: bool,
+//     };
 
-    try std.testing.expectEqual(MyUnion{ .my_bool = false }, try decode(MyUnion, &.{0xc2}));
-    try std.testing.expectEqual(MyUnion{ .my_u8 = 0 }, try decode(MyUnion, &.{0x00}));
-    try std.testing.expectError(error.Invalid, decode(MyUnion, &.{0xc4}));
-}
+//     try std.testing.expectEqual(MyUnion{ .my_bool = false }, try decode(MyUnion, &.{0xc2}));
+//     try std.testing.expectEqual(MyUnion{ .my_u8 = 0 }, try decode(MyUnion, &.{0x00}));
+//     try std.testing.expectError(error.Invalid, decode(MyUnion, &.{0xc4}));
+// }
 
 fn decodeEnum(comptime T: type, fbs: *FBS) !T {
     const TagInt = @typeInfo(T).@"enum".tag_type;

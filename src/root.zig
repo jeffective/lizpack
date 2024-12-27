@@ -60,95 +60,6 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, comptime T: type, in: []const u
     return Decoded(T){ .arena = arena, .value = res };
 }
 
-// fn FieldStructStrategy(comptime S: type, comptime DataStrategy: fn (comptime T: type) type, comptime field_default_strategy: ?fn (comptime T: type) type) type {
-//     var new_struct_fields: [@typeInfo(S).@"struct".fields.len]std.builtin.Type.StructField = undefined;
-//     for (&new_struct_fields, @typeInfo(S).@"struct".fields) |*new_struct_field, old_struct_field| {
-//         new_struct_field.* = .{
-//             .name = old_struct_field.name ++ "",
-//             .type = DataStrategy(old_struct_field.type),
-//             .default_value = if (field_default_strategy) |d| @as(?*const anyopaque, @ptrCast(&d(old_struct_field.type))) else null,
-//             .is_comptime = false,
-//             .alignment = if (@sizeOf(DataStrategy(old_struct_field.type)) > 0) @alignOf(DataStrategy(old_struct_field.type)) else 0,
-//         };
-//     }
-//     return @Type(.{ .@"struct" = .{
-//         .layout = .auto,
-//         .fields = &new_struct_fields,
-//         .decls = &.{},
-//         .is_tuple = false,
-//     } });
-// }
-
-// pub fn FormatOptionsDefault(comptime T: type) FormatOptions(T) {
-//     return switch (@typeInfo(T)) {
-//         .bool => void{},
-//         .int => void{},
-//         .float => void{},
-//         .array => switch (@typeInfo(T).array.child) {
-//             u8 => .bin,
-//             else => FormatOptionsDefault(@typeInfo(T).array.child),
-//         },
-//         .optional => FormatOptionsDefault(@typeInfo(T).optional.child),
-//         .vector => FormatOptionsDefault(@typeInfo(T).vector.child),
-//         .@"struct", .@"union" => .{},
-//         .@"enum" => .int,
-//         .pointer => switch (@typeInfo(T).pointer.size) {
-//             .One => FormatOptionsDefault(@typeInfo(T).pointer.child),
-//             .Slice => switch (@typeInfo(T).pointer.child) {
-//                 u8 => .bin,
-//                 else => FormatOptionsDefault(@typeInfo(T).pointer.child),
-//             },
-//             else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
-//         },
-//         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
-//     };
-// }
-
-// pub fn FormatOptions(comptime T: type) type {
-//     return switch (@typeInfo(T)) {
-//         .bool => void,
-//         .int => void,
-//         .float => void,
-//         .array => switch (@typeInfo(T).array.child) {
-//             u8 => enum {
-//                 bin,
-//                 str,
-//                 array,
-//             },
-//             else => FormatOptions(@typeInfo(T).array.child),
-//         },
-//         .optional => FormatOptions(@typeInfo(T).optional.child),
-//         .vector => FormatOptions(@typeInfo(T).vector.child),
-//         .@"struct", .@"union" => FieldStructStrategy(T, FormatOptions, FormatOptionsDefault),
-//         .@"enum" => enum {
-//             int,
-//             str,
-//         },
-//         .pointer => switch (@typeInfo(T).pointer.size) {
-//             .One => FormatOptions(@typeInfo(T).pointer.child),
-//             .Slice => switch (@typeInfo(T).pointer.child) {
-//                 u8 => enum {
-//                     str,
-//                     bin,
-//                     array,
-//                 },
-//                 else => FormatOptions(@typeInfo(T).pointer.child),
-//             },
-//             else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
-//         },
-//         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
-//     };
-// }
-
-// test "format options" {
-//     const Foo = struct {
-//         foo: u8,
-//         bar: []const u8,
-//     };
-//     const foo_options: FormatOptions(Foo) = FormatOptionsDefault(Foo);
-//     try std.testing.expectEqual(foo_options, @as(FormatOptions(Foo), .{ .foo = void{}, .bar = .bin }));
-// }
-
 test "byte stream too long returns error" {
     try std.testing.expectError(error.Invalid, decode(bool, &.{ 0xc3, 0x00 }));
 }
@@ -954,3 +865,92 @@ test "decode float" {
 test {
     _ = std.testing.refAllDecls(@This());
 }
+
+// fn FieldStructStrategy(comptime S: type, comptime DataStrategy: fn (comptime T: type) type, comptime field_default_strategy: ?fn (comptime T: type) type) type {
+//     var new_struct_fields: [@typeInfo(S).@"struct".fields.len]std.builtin.Type.StructField = undefined;
+//     for (&new_struct_fields, @typeInfo(S).@"struct".fields) |*new_struct_field, old_struct_field| {
+//         new_struct_field.* = .{
+//             .name = old_struct_field.name ++ "",
+//             .type = DataStrategy(old_struct_field.type),
+//             .default_value = if (field_default_strategy) |d| @as(?*const anyopaque, @ptrCast(&d(old_struct_field.type))) else null,
+//             .is_comptime = false,
+//             .alignment = if (@sizeOf(DataStrategy(old_struct_field.type)) > 0) @alignOf(DataStrategy(old_struct_field.type)) else 0,
+//         };
+//     }
+//     return @Type(.{ .@"struct" = .{
+//         .layout = .auto,
+//         .fields = &new_struct_fields,
+//         .decls = &.{},
+//         .is_tuple = false,
+//     } });
+// }
+
+// pub fn FormatOptionsDefault(comptime T: type) FormatOptions(T) {
+//     return switch (@typeInfo(T)) {
+//         .bool => void{},
+//         .int => void{},
+//         .float => void{},
+//         .array => switch (@typeInfo(T).array.child) {
+//             u8 => .bin,
+//             else => FormatOptionsDefault(@typeInfo(T).array.child),
+//         },
+//         .optional => FormatOptionsDefault(@typeInfo(T).optional.child),
+//         .vector => FormatOptionsDefault(@typeInfo(T).vector.child),
+//         .@"struct", .@"union" => .{},
+//         .@"enum" => .int,
+//         .pointer => switch (@typeInfo(T).pointer.size) {
+//             .One => FormatOptionsDefault(@typeInfo(T).pointer.child),
+//             .Slice => switch (@typeInfo(T).pointer.child) {
+//                 u8 => .bin,
+//                 else => FormatOptionsDefault(@typeInfo(T).pointer.child),
+//             },
+//             else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
+//         },
+//         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
+//     };
+// }
+
+// pub fn FormatOptions(comptime T: type) type {
+//     return switch (@typeInfo(T)) {
+//         .bool => void,
+//         .int => void,
+//         .float => void,
+//         .array => switch (@typeInfo(T).array.child) {
+//             u8 => enum {
+//                 bin,
+//                 str,
+//                 array,
+//             },
+//             else => FormatOptions(@typeInfo(T).array.child),
+//         },
+//         .optional => FormatOptions(@typeInfo(T).optional.child),
+//         .vector => FormatOptions(@typeInfo(T).vector.child),
+//         .@"struct", .@"union" => FieldStructStrategy(T, FormatOptions, FormatOptionsDefault),
+//         .@"enum" => enum {
+//             int,
+//             str,
+//         },
+//         .pointer => switch (@typeInfo(T).pointer.size) {
+//             .One => FormatOptions(@typeInfo(T).pointer.child),
+//             .Slice => switch (@typeInfo(T).pointer.child) {
+//                 u8 => enum {
+//                     str,
+//                     bin,
+//                     array,
+//                 },
+//                 else => FormatOptions(@typeInfo(T).pointer.child),
+//             },
+//             else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
+//         },
+//         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
+//     };
+// }
+
+// test "format options" {
+//     const Foo = struct {
+//         foo: u8,
+//         bar: []const u8,
+//     };
+//     const foo_options: FormatOptions(Foo) = FormatOptionsDefault(Foo);
+//     try std.testing.expectEqual(foo_options, @as(FormatOptions(Foo), .{ .foo = void{}, .bar = .bin }));
+// }

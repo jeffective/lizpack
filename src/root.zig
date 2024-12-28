@@ -251,7 +251,15 @@ fn encodeEnum(value: anytype, writer: anytype, format_options: anytype) !void {
             const int: TagInt = @intFromEnum(value);
             try encodeInt(int, writer);
         },
-        .str => unreachable, // TODO
+        .str => {
+            comptime assert(@typeInfo(@TypeOf(value)).@"enum".is_exhaustive); // TODO: only exhaustive enums supported
+            // TODO: carefull, if you support non-exhaustive, change this for something that doesn't panic
+            switch (value) {
+                inline else => |tag| {
+                    try encodeStr(@tagName(tag), writer);
+                },
+            }
+        },
     }
 }
 
@@ -260,6 +268,20 @@ test "round trip enum" {
     const expected: enum { foo, bar } = .foo;
     const slice = try encode(expected, &out);
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+test "round trip str" {
+    var out: [1000]u8 = undefined;
+    const expected: enum { foo, bar } = .foo;
+    const slice = try encodeCustom(expected, &out, .{ .format = .str });
+    try std.testing.expectEqual(expected, decodeCustom(@TypeOf(expected), slice, .{ .format = .str }));
+}
+
+test "encode enum as str" {
+    var out: [1000]u8 = undefined;
+    const expected: enum { foo, bar } = .foo;
+    const slice = try encodeCustom(expected, &out, .{ .format = .str });
+    try std.testing.expectEqualSlices(u8, &.{ 0b10100011, 'f', 'o', 'o' }, slice);
 }
 
 fn encodeStruct(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
@@ -284,23 +306,7 @@ fn encodeStruct(value: anytype, writer: anytype, seeker: anytype, format_options
     try writer.writeByte(format_byte.encode());
 
     inline for (comptime std.meta.fieldNames(@TypeOf(value)), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, format_option_field_name| {
-        const format_key: Spec.Format = switch (field_name.len) {
-            0 => unreachable,
-            1...std.math.maxInt(u5) => |len| .{ .fixstr = .{ .len = @intCast(len) } },
-            std.math.maxInt(u5) + 1...std.math.maxInt(u8) => .{ .str_8 = {} },
-            std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .str_16 = {} },
-            std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .str_32 = {} },
-            else => @compileError("Field name" ++ field_name ++ " too long"),
-        };
-        try writer.writeByte(format_key.encode());
-        switch (format_key) {
-            .fixstr => {},
-            .str_8 => try writer.writeInt(u8, @intCast(field_name.len), .big),
-            .str_16 => try writer.writeInt(u16, @intCast(field_name.len), .big),
-            .str_32 => try writer.writeInt(u32, @intCast(field_name.len), .big),
-            else => unreachable,
-        }
-        try writer.writeAll(field_name);
+        try encodeStr(field_name, writer);
         try encodeAny(@field(value, field_name), writer, seeker, @field(format_options.fields, format_option_field_name));
     }
 }
@@ -310,6 +316,26 @@ test "round trip struct" {
     const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
     const slice = try encode(expected, &out);
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+fn encodeStr(comptime str: []const u8, writer: anytype) !void {
+    comptime assert(str.len <= std.math.maxInt(u32));
+    const format: Spec.Format = switch (str.len) {
+        0...std.math.maxInt(u5) => |len| .{ .fixstr = .{ .len = @intCast(len) } },
+        std.math.maxInt(u5) + 1...std.math.maxInt(u8) => .{ .str_8 = {} },
+        std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .str_16 = {} },
+        std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .str_32 = {} },
+        else => unreachable,
+    };
+    try writer.writeByte(format.encode());
+    switch (format) {
+        .fixstr => {},
+        .str_8 => try writer.writeInt(u8, @intCast(str.len), .big),
+        .str_16 => try writer.writeInt(u16, @intCast(str.len), .big),
+        .str_32 => try writer.writeInt(u32, @intCast(str.len), .big),
+        else => unreachable,
+    }
+    try writer.writeAll(str);
 }
 
 fn encodeVector(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
@@ -744,7 +770,26 @@ fn decodeEnum(comptime T: type, reader: anytype, format_options: anytype) !T {
             };
             return res;
         },
-        .str => unreachable, // TODO
+        .str => {
+            var field_name_buffer: [largestFieldNameLength(T)]u8 = undefined;
+            const format_key = Spec.Format.decode(try reader.readByte());
+            const name_len = switch (format_key) {
+                .bin_8, .str_8 => try reader.readInt(u8, .big),
+                .bin_16, .str_16 => try reader.readInt(u16, .big),
+                .bin_32, .str_32 => try reader.readInt(u32, .big),
+                .fixstr => |val| val.len,
+                else => return error.Invalid,
+            };
+            if (name_len > largestFieldNameLength(T)) return error.Invalid;
+            assert(name_len <= largestFieldNameLength(T));
+            try reader.readNoEof(field_name_buffer[0..name_len]);
+
+            inline for (comptime std.enums.values(T)) |enum_value| {
+                if (std.mem.eql(u8, @tagName(enum_value), field_name_buffer[0..name_len])) {
+                    return enum_value;
+                }
+            } else return error.Invalid;
+        },
     }
 }
 
@@ -755,6 +800,16 @@ test "decode enum" {
     };
     try std.testing.expectEqual(TestEnum.foo, decode(TestEnum, &.{0x00}));
     try std.testing.expectEqual(TestEnum.bar, decode(TestEnum, &.{0x01}));
+}
+
+test "decode enum str" {
+    const TestEnum = enum {
+        foo,
+        bars,
+    };
+    try std.testing.expectEqual(TestEnum.foo, decodeCustom(TestEnum, &.{ 0b10100011, 'f', 'o', 'o' }, .{ .format = .str }));
+    try std.testing.expectEqual(TestEnum.bars, decodeCustom(TestEnum, &.{ 0b10100100, 'b', 'a', 'r', 's' }, .{ .format = .str }));
+    try std.testing.expectError(error.Invalid, decodeCustom(TestEnum, &.{ 0b10100101, 'b', 'a', 'z', 'z', 'z' }, .{ .format = .str }));
 }
 
 fn largestFieldNameLength(comptime T: type) comptime_int {

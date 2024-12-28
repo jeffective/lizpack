@@ -75,3 +75,7 @@ test "customize encoding" {
         decoded.value,
     );
 }
+
+test {
+    _ = @import("example_formats.zig");
+}

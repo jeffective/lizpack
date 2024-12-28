@@ -46,9 +46,20 @@ const CustomerComplaint = struct {
 | `[]T`            | N length array of T                    | N length array of T                             |
 | `[:x]T`          | N + 1 length array of T ending in x    | N + 1 length array of T ending in x             |
 | `[]u8`           | bin                                    | bin                                             |
+| `[:x]u8`         | bin ending in x                        | bin ending in x                                 |
 | `*T`             | T                                      | T                                               |
 
 Note: pointer types require allocation to decode.
+
+## Customizing Formats
+
+You can customize how types are formatted in message pack:
+
+| Zig Type | Available Encodings |
+| -------- | ------------------------ |
+| `enum`   | string, int              |
+
+See [examples](examples/example_formats.zig) for how to do it.
 
 ## Examples
 

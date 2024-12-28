@@ -285,29 +285,25 @@ test "encode enum as str" {
 }
 
 fn encodeStruct(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
-    switch (format_options.layout) {
-        .map => {},
-        .array => unreachable, // TODO
-    }
     const num_struct_fields = @typeInfo(@TypeOf(value)).@"struct".fields.len;
 
     if (num_struct_fields == 0) return;
 
     assert(num_struct_fields > 0);
-
-    const format_byte: Spec.Format = switch (num_struct_fields) {
-        0 => unreachable,
-        1...std.math.maxInt(u4) => .{ .fixmap = .{ .n_elements = @intCast(num_struct_fields) } },
-        std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .map_16 = {} },
-        std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .map_32 = {} },
-        else => @compileError("MessagePack only supports up to u32 len maps."),
-    };
-
-    try writer.writeByte(format_byte.encode());
-
-    inline for (comptime std.meta.fieldNames(@TypeOf(value)), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, format_option_field_name| {
-        try encodeStr(field_name, writer);
-        try encodeAny(@field(value, field_name), writer, seeker, @field(format_options.fields, format_option_field_name));
+    switch (format_options.layout) {
+        .map => {
+            try encodeMapFormat(num_struct_fields, writer);
+            inline for (comptime std.meta.fieldNames(@TypeOf(value)), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, format_option_field_name| {
+                try encodeStr(field_name, writer);
+                try encodeAny(@field(value, field_name), writer, seeker, @field(format_options.fields, format_option_field_name));
+            }
+        },
+        .array => {
+            try encodeArrayFormat(num_struct_fields, writer);
+            inline for (comptime std.meta.fieldNames(@TypeOf(value)), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, format_option_field_name| {
+                try encodeAny(@field(value, field_name), writer, seeker, @field(format_options.fields, format_option_field_name));
+            }
+        },
     }
 }
 
@@ -316,6 +312,48 @@ test "round trip struct" {
     const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
     const slice = try encode(expected, &out);
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+test "round trip struct array" {
+    var out: [1000]u8 = undefined;
+    const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
+    const format: FormatOptions(@TypeOf(expected)) = .{ .layout = .array };
+    const slice = try encodeCustom(expected, &out, .{ .format = format });
+    try std.testing.expectEqual(expected, decodeCustom(@TypeOf(expected), slice, .{ .format = format }));
+}
+
+fn encodeArrayFormat(comptime len: comptime_int, writer: anytype) !void {
+    const format: Spec.Format = switch (len) {
+        0 => unreachable,
+        1...std.math.maxInt(u4) => .{ .fixarray = .{ .len = @intCast(len) } },
+        std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
+        std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
+        else => @compileError("MessagePack only supports up to u32 len arrays."),
+    };
+    try writer.writeByte(format.encode());
+    switch (format) {
+        .fixarray => {},
+        .array_16 => try writer.writeInt(u16, @intCast(len), .big),
+        .array_32 => try writer.writeInt(u32, @intCast(len), .big),
+        else => unreachable,
+    }
+}
+
+fn encodeMapFormat(comptime len: comptime_int, writer: anytype) !void {
+    const format: Spec.Format = switch (len) {
+        0 => unreachable,
+        1...std.math.maxInt(u4) => .{ .fixmap = .{ .n_elements = @intCast(len) } },
+        std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .map_16 = {} },
+        std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .map_32 = {} },
+        else => @compileError("MessagePack only supports up to u32 len arrays."),
+    };
+    try writer.writeByte(format.encode());
+    switch (format) {
+        .fixmap => {},
+        .map_16 => try writer.writeInt(u16, @intCast(len), .big),
+        .map_32 => try writer.writeInt(u32, @intCast(len), .big),
+        else => unreachable,
+    }
 }
 
 fn encodeStr(comptime str: []const u8, writer: anytype) !void {
@@ -838,58 +876,78 @@ test "largest field name length" {
 
 fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) !T {
     switch (format_options.layout) {
-        .map => {},
-        .array => unreachable, // TODO
-    }
+        .map => {
+            const format = Spec.Format.decode(try reader.readByte());
+            const num_struct_fields = @typeInfo(T).@"struct".fields.len;
 
-    const format = Spec.Format.decode(try reader.readByte());
-    const num_struct_fields = @typeInfo(T).@"struct".fields.len;
-
-    switch (format) {
-        .fixmap => |fixmap| if (fixmap.n_elements != num_struct_fields) return error.Invalid,
-        .map_16 => if (try reader.readInt(u16, .big) != num_struct_fields) return error.Invalid,
-        .map_32 => if (try reader.readInt(u32, .big) != num_struct_fields) return error.Invalid,
-        else => return error.Invalid,
-    }
-
-    if (num_struct_fields == 0) return T{};
-
-    assert(num_struct_fields > 0);
-
-    var got_field: [num_struct_fields]bool = @splat(false);
-    var res: T = undefined;
-    // yes is this O(n2) ... i don't care.
-    for (0..num_struct_fields) |_| {
-        var field_name_buffer: [largestFieldNameLength(T)]u8 = undefined;
-        const format_key = Spec.Format.decode(try reader.readByte());
-        const name_len = switch (format_key) {
-            .bin_8, .str_8 => try reader.readInt(u8, .big),
-            .bin_16, .str_16 => try reader.readInt(u16, .big),
-            .bin_32, .str_32 => try reader.readInt(u32, .big),
-            .fixstr => |val| val.len,
-            else => return error.Invalid,
-        };
-        if (name_len > largestFieldNameLength(T)) return error.Invalid;
-        assert(name_len <= largestFieldNameLength(T));
-        try reader.readNoEof(field_name_buffer[0..name_len]);
-        inline for (comptime std.meta.fieldNames(T), 0.., comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, i, format_option_field_name| {
-            if (std.mem.eql(u8, field_name, field_name_buffer[0..name_len])) {
-                @field(res, field_name) = try decodeAny(
-                    @FieldType(T, field_name),
-                    reader,
-                    seeker,
-                    maybe_alloc,
-                    @field(format_options.fields, format_option_field_name),
-                );
-                got_field[i] = true;
+            switch (format) {
+                .fixmap => |fixmap| if (fixmap.n_elements != num_struct_fields) return error.Invalid,
+                .map_16 => if (try reader.readInt(u16, .big) != num_struct_fields) return error.Invalid,
+                .map_32 => if (try reader.readInt(u32, .big) != num_struct_fields) return error.Invalid,
+                else => return error.Invalid,
             }
-        }
+
+            if (num_struct_fields == 0) return T{};
+
+            assert(num_struct_fields > 0);
+
+            var got_field: [num_struct_fields]bool = @splat(false);
+            var res: T = undefined;
+            // yes is this O(n2) ... i don't care.
+            for (0..num_struct_fields) |_| {
+                var field_name_buffer: [largestFieldNameLength(T)]u8 = undefined;
+                const format_key = Spec.Format.decode(try reader.readByte());
+                const name_len = switch (format_key) {
+                    .bin_8, .str_8 => try reader.readInt(u8, .big),
+                    .bin_16, .str_16 => try reader.readInt(u16, .big),
+                    .bin_32, .str_32 => try reader.readInt(u32, .big),
+                    .fixstr => |val| val.len,
+                    else => return error.Invalid,
+                };
+                if (name_len > largestFieldNameLength(T)) return error.Invalid;
+                assert(name_len <= largestFieldNameLength(T));
+                try reader.readNoEof(field_name_buffer[0..name_len]);
+                inline for (comptime std.meta.fieldNames(T), 0.., comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, i, format_option_field_name| {
+                    if (std.mem.eql(u8, field_name, field_name_buffer[0..name_len])) {
+                        @field(res, field_name) = try decodeAny(
+                            @FieldType(T, field_name),
+                            reader,
+                            seeker,
+                            maybe_alloc,
+                            @field(format_options.fields, format_option_field_name),
+                        );
+                        got_field[i] = true;
+                    }
+                }
+            }
+            if (!std.mem.allEqual(bool, &got_field, true)) return error.Invalid;
+            return res;
+        },
+        .array => {
+            const format = Spec.Format.decode(try reader.readByte());
+            const num_struct_fields = @typeInfo(T).@"struct".fields.len;
+
+            switch (format) {
+                .fixarray => |fixarray| if (fixarray.len != num_struct_fields) return error.Invalid,
+                .array_16 => if (try reader.readInt(u16, .big) != num_struct_fields) return error.Invalid,
+                .array_32 => if (try reader.readInt(u32, .big) != num_struct_fields) return error.Invalid,
+                else => return error.Invalid,
+            }
+
+            if (num_struct_fields == 0) return T{};
+
+            assert(num_struct_fields > 0);
+
+            var res: T = undefined;
+            inline for (comptime std.meta.fieldNames(T), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, format_option_field_name| {
+                @field(res, field_name) = try decodeAny(@FieldType(T, field_name), reader, seeker, maybe_alloc, @field(format_options.fields, format_option_field_name));
+            }
+            return res;
+        },
     }
-    if (!std.mem.allEqual(bool, &got_field, true)) return error.Invalid;
-    return res;
 }
 
-test "decode struct" {
+test "decode struct map" {
     const Foo = struct {
         foo: u8 = 3,
         bar: u16 = 2,
@@ -947,6 +1005,29 @@ test "decode struct" {
     try std.testing.expectEqualDeep(Foo2{}, try decode(Foo2, bytes));
     try std.testing.expectError(error.Invalid, decode(Foo2, bad_bytes));
     try std.testing.expectError(error.Invalid, decode(Foo2, bad_bytes2));
+}
+
+test "decode struct array" {
+    const Foo = struct {
+        foo: u8 = 3,
+        bar: u16 = 2,
+    };
+
+    const bytes: []const u8 = &.{
+        (Spec.Format{ .fixarray = .{ .len = 2 } }).encode(),
+        0x03,
+        0x02,
+    };
+
+    const bad_bytes: []const u8 = &.{
+        (Spec.Format{ .fixarray = .{ .len = 3 } }).encode(),
+        0x03,
+        0x02,
+        0x03,
+    };
+
+    try std.testing.expectEqualDeep(Foo{}, try decodeCustom(Foo, bytes, .{ .format = .{ .layout = .array } }));
+    try std.testing.expectError(error.Invalid, decodeCustom(Foo, bad_bytes, .{ .format = .{ .layout = .array } }));
 }
 
 fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) !T {

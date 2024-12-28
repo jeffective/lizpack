@@ -2,6 +2,50 @@ const std = @import("std");
 
 const lizpack = @import("lizpack");
 
+test "nested format customizations" {
+    const Location = struct {
+        city: []const u8,
+        state: []const u8,
+        pub const format: lizpack.FormatOptions(@This()) = .{
+            .layout = .map,
+            .fields = .{
+                .city = .str,
+                .state = .str,
+            },
+        };
+    };
+    const User = struct {
+        username: []const u8,
+        uuid: [16]u8,
+        location: Location,
+
+        pub const format: lizpack.FormatOptions(@This()) = .{
+            .layout = .map,
+            .fields = .{
+                .username = .str,
+                .uuid = .bin,
+                .location = Location.format,
+            },
+        };
+    };
+
+    const my_user: User = .{
+        .username = "foo",
+        .uuid = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .location = .{
+            .city = "Los Angeles",
+            .state = "California",
+        },
+    };
+
+    var out: [1000]u8 = undefined;
+    const expected = my_user;
+    const slice = try lizpack.encodeCustom(expected, &out, .{ .format = User.format });
+    const decoded = try lizpack.decodeCustomAlloc(std.testing.allocator, @TypeOf(expected), slice, .{ .format = User.format });
+    defer decoded.deinit();
+    try std.testing.expectEqualDeep(expected, decoded.value);
+}
+
 test "enum format customizations" {
     var out: [1000]u8 = undefined;
     const MyEnum = enum {

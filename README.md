@@ -39,21 +39,24 @@ const CustomerComplaint = struct {
 | `enum`           | integer                             |
 | `[N]T`           | N length array of T                 |
 | `[N:x]T`         | N+1 length array of T ending in x   |
-| `[N]u8`          | bin                                 |
+| `[N]u8`          | str                                 |
 | `@Vector(N, T)`  | N length array of T                 |
 | `struct`         | map, str: field value               |
 | `union (enum)`   | map (single key-value pair)         |
 | `[]T`            | N length array of T                 |
 | `[:x]T`          | N + 1 length array of T ending in x |
-| `[]u8`           | bin                                 |
-| `[:x]u8`         | bin ending in x                     |
+| `[]u8`           | str                                 |
+| `[:x]u8`         | str ending in x                     |
 | `*T`             | T                                   |
+
+> `str` is the default MessagePack type for `[]u8` because it is the smallest for short slices.
 
 Unsupported types:
 
 | Zig Type           | Reason                                                       |
 | ------------------ | ------------------------------------------------------------ |
 | `union` (untagged) | Decoding cannot determine active field, and neither can you. |
+| `error`            | I can add this, if someone asks. Perhaps as `str`?           |
 
 Note: pointer types require allocation to decode.
 

@@ -671,11 +671,28 @@ fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: anytyp
     const has_sentinel = @typeInfo(T).pointer.sentinel != null;
     const Child = @typeInfo(T).pointer.child;
     const format = Spec.Format.decode(try reader.readByte());
-    switch (format) {
-        .fixarray, .array_16, .array_32 => {},
-        .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => if (Child != u8) return error.Invalid,
-        else => return error.Invalid,
+    if (Child == u8) {
+        switch (format_options) {
+            .bin => switch (format) {
+                .bin_8, .bin_16, .bin_32 => {},
+                else => return error.Invalid,
+            },
+            .str => switch (format) {
+                .fixstr, .str_8, .str_16, .str_32 => {},
+                else => return error.Invalid,
+            },
+            .array => switch (format) {
+                .fixarray, .array_16, .array_32 => {},
+                else => return error.Invalid,
+            },
+        }
+    } else {
+        switch (format) {
+            .fixarray, .array_16, .array_32 => {},
+            else => return error.Invalid,
+        }
     }
+
     const len = switch (format) {
         .fixarray => |fmt| fmt.len,
         .array_16 => try reader.readInt(u16, .big),
@@ -740,21 +757,21 @@ test "decode slice bools" {
 }
 
 test "decode slice str" {
-    const decoded = try decodeAlloc(std.testing.allocator, []const u8, &.{ 0xd9, 0x03, 'f', 'o', 'o' });
+    const decoded = try decodeCustomAlloc(std.testing.allocator, []const u8, &.{ 0xd9, 0x03, 'f', 'o', 'o' }, .{ .format = .str });
     defer decoded.deinit();
     const expected: []const u8 = "foo";
     try std.testing.expectEqualSlices(u8, expected, decoded.value);
 }
 
 test "decode slice bin" {
-    const decoded = try decodeAlloc(std.testing.allocator, []const u8, &.{ 0xc4, 0x03, 'f', 'o', 'o' });
+    const decoded = try decodeCustomAlloc(std.testing.allocator, []const u8, &.{ 0xc4, 0x03, 'f', 'o', 'o' }, .{ .format = .bin });
     defer decoded.deinit();
     const expected: []const u8 = "foo";
     try std.testing.expectEqualSlices(u8, expected, decoded.value);
 }
 
 test "decode slice fixstr" {
-    const decoded = try decodeAlloc(std.testing.allocator, []const u8, &.{ 0b10100011, 'f', 'o', 'o' });
+    const decoded = try decodeCustomAlloc(std.testing.allocator, []const u8, &.{ 0b10100011, 'f', 'o', 'o' }, .{ .format = .str });
     defer decoded.deinit();
     const expected: []const u8 = "foo";
     try std.testing.expectEqualSlices(u8, expected, decoded.value);
@@ -769,7 +786,7 @@ test "decode slice sentinel invalid" {
 }
 
 test "decode slice sentinel" {
-    const decoded = try decodeAlloc(std.testing.allocator, [:0]const u8, &.{ 0b10100100, 'f', 'o', 'o', 0 });
+    const decoded = try decodeCustomAlloc(std.testing.allocator, [:0]const u8, &.{ 0b10100100, 'f', 'o', 'o', 0 }, .{ .format = .str });
     defer decoded.deinit();
     const expected: [:0]const u8 = "foo";
     try std.testing.expectEqualSlices(u8, expected, decoded.value);
@@ -1338,7 +1355,7 @@ pub fn FormatOptionsDefault(comptime T: type) FormatOptions(T) {
         .pointer => switch (@typeInfo(T).pointer.size) {
             .One => FormatOptionsDefault(@typeInfo(T).pointer.child),
             .Slice => switch (@typeInfo(T).pointer.child) {
-                u8 => .bin,
+                u8 => .str,
                 else => FormatOptionsDefault(@typeInfo(T).pointer.child),
             },
             else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
@@ -1399,7 +1416,7 @@ test "encode options" {
     try std.testing.expectEqual(encode_options, @as(EncodeOptions(Foo), .{
         .format = .{
             .layout = .map,
-            .fields = .{ .foo = void{}, .bar = .bin },
+            .fields = .{ .foo = void{}, .bar = .str },
         },
     }));
 }
@@ -1413,7 +1430,7 @@ test "encode options 2" {
     try std.testing.expectEqual(encode_options, @as(EncodeOptions(Foo), .{
         .format = .{
             .layout = .map,
-            .fields = .{ .foo = void{}, .bar = .bin },
+            .fields = .{ .foo = void{}, .bar = .str },
         },
     }));
 }

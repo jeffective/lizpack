@@ -30,21 +30,21 @@ const CustomerComplaint = struct {
 
 ## Default Formats
 
-| Zig Type         | Encodes As MessagePack Type                                              | Decodes From MessagePack Type                               | Decoding Requires Allocator |
-| ---------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------- | --------------------------- |
-| `bool`           | bool                                                                     | bool                                                        |                             |
-| `null`           | nil                                                                      | nil                                                         |                             |
-| `u3`,`u45`, `i6` | integer                                                                  | integer                                                     |                             |
-| `?T`             | nil or T                                                                 | nil or T                                                    |                             |
-| `enum`           | integer                                                                  | integer                                                     |                             |
-| `[N]T`           | N length array of T                                                      | N length array of T                                         |                             |
-| `[N:x]T`         | N+1 length array of T ending in x                                        | N+1 length array of T ending in x                           |                             |
-| `@Vector(N, T)`  | N length array of T                                                      | N length array of T                                         |                             |
-| `struct`         | map, keys: str field names(ordered by declaration), values: field values | map, keys: str field names(unordered), values: field values |                             |
-| `union (enum)`   | active field                                                             | first successful field (ordered by declaration)             |                             |
-| `[]T`            | N length array of T                                                      | N length array of T                                         | ✅                          |
-| `[:x]T`          | N + 1 length array of T ending in x                                      | N + 1 length array of T ending in x                         | ✅                          |
-| `*T`             | T                                                                        | T                                                           | ✅                          |
+| Zig Type         | Encodes As MessagePack Type            | Decodes From MessagePack Type                   | Note                |
+| ---------------- | -------------------------------------- | ----------------------------------------------- | ------------------- |
+| `bool`           | bool                                   | bool                                            |                     |
+| `null`           | nil                                    | nil                                             |                     |
+| `u3`,`u45`, `i6` | integer                                | integer                                         |                     |
+| `?T`             | nil or T                               | nil or T                                        |                     |
+| `enum`           | integer                                | integer                                         |                     |
+| `[N]T`           | N length array of T                    | N length array of T                             |                     |
+| `[N:x]T`         | N+1 length array of T ending in x      | N+1 length array of T ending in x               |                     |
+| `@Vector(N, T)`  | N length array of T                    | N length array of T                             |                     |
+| `struct`         | map, str (order declared): field value | map, str (unordered): field value               |                     |
+| `union (enum)`   | active field                           | first successful field (ordered by declaration) |                     |
+| `[]T`            | N length array of T                    | N length array of T                             | use `decodeAlloc()` |
+| `[:x]T`          | N + 1 length array of T ending in x    | N + 1 length array of T ending in x             | use `decodeAlloc()` |
+| `*T`             | T                                      | T                                               | use `decodeAlloc()` |
 
 ## Examples
 

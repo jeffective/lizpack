@@ -50,6 +50,14 @@ test "customize encoding" {
     const CustomerComplaint = struct {
         uuid: [16]u8,
         message: []const u8,
+
+        const format: lizpack.FormatOptions(@This()) = .{
+            .layout = .map,
+            .fields = .{
+                .uuid = .bin,
+                .message = .str,
+            },
+        };
     };
 
     var out: [1000]u8 = undefined;
@@ -58,7 +66,9 @@ test "customize encoding" {
         .message = "Your software is horrible!",
     };
     const slice: []u8 = try lizpack.encode(expected, &out);
-    const decoded = try lizpack.decodeCustomAlloc(std.testing.allocator, CustomerComplaint, slice, .{ .format = .{ .fields = .{ .uuid = .bin } } });
+    const decoded = try lizpack.decodeCustomAlloc(std.testing.allocator, CustomerComplaint, slice, .{
+        .format = CustomerComplaint.format,
+    });
     defer decoded.deinit();
     try std.testing.expectEqualDeep(
         expected,

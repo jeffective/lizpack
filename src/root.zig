@@ -38,18 +38,15 @@ pub fn DecodeOptions(comptime T: type) type {
     };
 }
 
-// pub fn decodeWithOptions(comptime T: type, in: []const u8, options: DecodeOptions(T)) error{Invalid}!T {
-//     var fbs = std.io.fixedBufferStream(in);
-//     const res = decodeAny(T, fbs.reader(), fbs.seekableStream(), null) catch return error.Invalid;
-//     if (fbs.pos != fbs.buffer.len) return error.Invalid;
-//     return res;
-// }
-
-pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {
+pub fn decodeCustom(comptime T: type, in: []const u8, options: DecodeOptions(T)) error{Invalid}!T {
     var fbs = std.io.fixedBufferStream(in);
-    const res = decodeAny(T, fbs.reader(), fbs.seekableStream(), null) catch return error.Invalid;
+    const res = decodeAny(T, fbs.reader(), fbs.seekableStream(), null, options.format) catch return error.Invalid;
     if (fbs.pos != fbs.buffer.len) return error.Invalid;
     return res;
+}
+
+pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {
+    return try decodeCustom(T, in, .{});
 }
 
 pub fn Decoded(comptime T: type) type {
@@ -64,19 +61,23 @@ pub fn Decoded(comptime T: type) type {
     };
 }
 
-pub fn decodeAlloc(allocator: std.mem.Allocator, comptime T: type, in: []const u8) error{ OutOfMemory, Invalid }!Decoded(T) {
+pub fn decodeCustomAlloc(allocator: std.mem.Allocator, comptime T: type, in: []const u8, options: DecodeOptions(T)) error{ OutOfMemory, Invalid }!Decoded(T) {
     var fbs = std.io.fixedBufferStream(in);
     const arena = try allocator.create(std.heap.ArenaAllocator);
     errdefer allocator.destroy(arena);
     arena.* = .init(allocator);
     errdefer arena.deinit();
-    const res = decodeAny(T, fbs.reader(), fbs.seekableStream(), arena.allocator()) catch |err| switch (err) {
+    const res = decodeAny(T, fbs.reader(), fbs.seekableStream(), arena.allocator(), options.format) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Invalid => return error.Invalid,
         error.EndOfStream => return error.Invalid,
     };
     if (fbs.pos != fbs.buffer.len) return error.Invalid;
     return Decoded(T){ .arena = arena, .value = res };
+}
+
+pub fn decodeAlloc(allocator: std.mem.Allocator, comptime T: type, in: []const u8) error{ OutOfMemory, Invalid }!Decoded(T) {
+    return try decodeCustomAlloc(allocator, T, in, .{});
 }
 
 test "byte stream too long returns error" {
@@ -540,34 +541,34 @@ test "roundtrip bool" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
 }
 
-fn decodeAny(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype) !T {
+fn decodeAny(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) !T {
     switch (@typeInfo(T)) {
         .bool => return try decodeBool(reader),
         .int => return try decodeInt(T, reader),
         .float => return try decodeFloat(T, reader),
-        .array => return try decodeArray(T, reader, seeker, maybe_alloc),
-        .optional => return try decodeOptional(T, reader, seeker, maybe_alloc),
-        .vector => return try decodeVector(T, reader, seeker, maybe_alloc),
-        .@"struct" => return try decodeStruct(T, reader, seeker, maybe_alloc),
-        .@"enum" => return try decodeEnum(T, reader),
-        .@"union" => return try decodeUnion(T, reader, seeker, maybe_alloc),
-        .pointer => return try decodePointer(T, reader, seeker, maybe_alloc),
+        .array => return try decodeArray(T, reader, seeker, maybe_alloc, format_options),
+        .optional => return try decodeOptional(T, reader, seeker, maybe_alloc, format_options),
+        .vector => return try decodeVector(T, reader, seeker, maybe_alloc, format_options),
+        .@"struct" => return try decodeStruct(T, reader, seeker, maybe_alloc, format_options),
+        .@"enum" => return try decodeEnum(T, reader, format_options),
+        .@"union" => return try decodeUnion(T, reader, seeker, maybe_alloc, format_options),
+        .pointer => return try decodePointer(T, reader, seeker, maybe_alloc, format_options),
 
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
     }
     unreachable;
 }
 
-fn decodePointer(comptime T: type, reader: anytype, seeker: anytype, alloc: std.mem.Allocator) !T {
+fn decodePointer(comptime T: type, reader: anytype, seeker: anytype, alloc: std.mem.Allocator, format_options: anytype) !T {
     switch (@typeInfo(T).pointer.size) {
         .One => {
             const Child = @typeInfo(T).pointer.child;
             const res = try alloc.create(Child);
             errdefer alloc.destroy(res);
-            res.* = try decodeAny(Child, reader, seeker, alloc);
+            res.* = try decodeAny(Child, reader, seeker, alloc, format_options);
             return res;
         },
-        .Slice => return try decodeSlice(T, reader, seeker, alloc),
+        .Slice => return try decodeSlice(T, reader, seeker, alloc, format_options),
         else => @compileError("unsupported type " ++ @typeName(T)),
     }
 }
@@ -578,7 +579,8 @@ test "decode pointer one" {
     try std.testing.expectEqual(true, decoded.value.*);
 }
 
-fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: std.mem.Allocator) !T {
+fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: std.mem.Allocator, format_options: anytype) !T {
+    const has_sentinel = @typeInfo(T).pointer.sentinel != null;
     const Child = @typeInfo(T).pointer.child;
     const format = Spec.Format.decode(try reader.readByte());
     switch (format) {
@@ -596,23 +598,48 @@ fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: std.me
         .bin_32, .str_32 => try reader.readInt(u32, .big),
         else => unreachable,
     };
-    const res: []Child = try alloc.alloc(Child, len);
+    if (len == 0 and has_sentinel) return error.Invalid;
+    const res = switch (has_sentinel) {
+        true => blk: {
+            const sentinel_value: Child = @as(*const Child, @ptrCast(@typeInfo(T).pointer.sentinel.?)).*;
+            break :blk try alloc.allocSentinel(Child, len - @as(comptime_int, @intFromBool(has_sentinel)), sentinel_value);
+        },
+        false => try alloc.alloc(Child, len),
+    };
     errdefer alloc.free(res);
 
-    switch (format) {
-        .fixarray, .array_16, .array_32 => {
-            for (0..len) |i| {
-                res[i] = try decodeAny(Child, reader, seeker, alloc);
-            }
-        },
-        .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
-            for (0..len) |i| {
-                if (Child == u8) {
+    const decode_len = len - @as(comptime_int, @intFromBool(has_sentinel));
+
+    switch (Child) {
+        u8 => switch (format) {
+            .fixarray, .array_16, .array_32 => {
+                for (0..decode_len) |i| {
+                    res[i] = try decodeAny(Child, reader, seeker, alloc, format_options);
+                }
+            },
+            .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
+                for (0..decode_len) |i| {
                     res[i] = try reader.readByte();
                 }
-            }
+                if (@typeInfo(T).pointer.sentinel) |sentinel| {
+                    const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+                    if (try reader.readByte() != sentinel_value) return error.Invalid;
+                }
+            },
+            else => unreachable,
         },
-        else => unreachable,
+        else => switch (format) {
+            .fixarray, .array_16, .array_32 => {
+                for (0..decode_len) |i| {
+                    res[i] = try decodeAny(Child, reader, seeker, alloc, format_options);
+                }
+                if (@typeInfo(T).pointer.sentinel) |sentinel| {
+                    const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+                    if (try decodeAny(Child, reader, seeker, alloc, format_options) != sentinel_value) return error.Invalid;
+                }
+            },
+            else => unreachable,
+        },
     }
     return res;
 }
@@ -651,11 +678,15 @@ test "decode slice invalid" {
 
 // TODO: refactor this to make it less garbage when inline for loops can have continue.
 // https://github.com/ziglang/zig/issues/9524
-fn decodeUnion(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator) !T {
+fn decodeUnion(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) !T {
+    switch (format_options.layout) {
+        .map => unreachable, // TODO
+        .active_field => {},
+    }
     _ = @typeInfo(T).@"union".tag_type orelse @compileError("Unions require a tag type.");
     const starting_position = try seeker.getPos();
-    const rval = rval: inline for (comptime std.meta.fields(T)) |union_field| {
-        const res = decodeAny(union_field.type, reader, seeker, maybe_alloc) catch |err| switch (err) {
+    const rval = rval: inline for (comptime std.meta.fields(T), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |union_field, union_field_format_name| {
+        const res = decodeAny(union_field.type, reader, seeker, maybe_alloc, @field(format_options.fields, union_field_format_name)) catch |err| switch (err) {
             error.Invalid, error.EndOfStream => |err2| blk: {
                 try seeker.seekTo(starting_position);
                 break :blk err2;
@@ -683,13 +714,18 @@ test "decode union" {
     try std.testing.expectError(error.Invalid, decode(MyUnion, &.{0xc4}));
 }
 
-fn decodeEnum(comptime T: type, reader: anytype) !T {
-    const TagInt = @typeInfo(T).@"enum".tag_type;
-    const int: TagInt = try decodeInt(TagInt, reader);
-    const res = std.meta.intToEnum(T, int) catch |err| switch (err) {
-        error.InvalidEnumTag => return error.Invalid,
-    };
-    return res;
+fn decodeEnum(comptime T: type, reader: anytype, format_options: anytype) !T {
+    switch (format_options) {
+        .int => {
+            const TagInt = @typeInfo(T).@"enum".tag_type;
+            const int: TagInt = try decodeInt(TagInt, reader);
+            const res = std.meta.intToEnum(T, int) catch |err| switch (err) {
+                error.InvalidEnumTag => return error.Invalid,
+            };
+            return res;
+        },
+        .str => unreachable, // TODO
+    }
 }
 
 test "decode enum" {
@@ -725,7 +761,12 @@ test "largest field name length" {
     try std.testing.expectEqual(4, largestFieldNameLength(Foo));
 }
 
-fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator) !T {
+fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) !T {
+    switch (format_options.layout) {
+        .map => {},
+        .array => unreachable, // TODO
+    }
+
     const format = Spec.Format.decode(try reader.readByte());
     const num_struct_fields = @typeInfo(T).@"struct".fields.len;
 
@@ -756,9 +797,15 @@ fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc:
         if (name_len > largestFieldNameLength(T)) return error.Invalid;
         assert(name_len <= largestFieldNameLength(T));
         try reader.readNoEof(field_name_buffer[0..name_len]);
-        inline for (comptime std.meta.fieldNames(T), 0..) |field_name, i| {
+        inline for (comptime std.meta.fieldNames(T), 0.., comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, i, format_option_field_name| {
             if (std.mem.eql(u8, field_name, field_name_buffer[0..name_len])) {
-                @field(res, field_name) = try decodeAny(@FieldType(T, field_name), reader, seeker, maybe_alloc);
+                @field(res, field_name) = try decodeAny(
+                    @FieldType(T, field_name),
+                    reader,
+                    seeker,
+                    maybe_alloc,
+                    @field(format_options.fields, format_option_field_name),
+                );
                 got_field[i] = true;
             }
         }
@@ -827,7 +874,7 @@ test "decode struct" {
     try std.testing.expectError(error.Invalid, decode(Foo2, bad_bytes2));
 }
 
-fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator) !T {
+fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) !T {
     const format = Spec.Format.decode(try reader.readByte());
 
     const Child = @typeInfo(T).optional.child;
@@ -836,7 +883,7 @@ fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_allo
         else => {
             // need to recover last byte we just consumed parsing the format.
             try seeker.seekBy(-1);
-            return try decodeAny(Child, reader, seeker, maybe_alloc);
+            return try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
         },
     }
 }
@@ -846,7 +893,7 @@ test "decode optional" {
     try std.testing.expectEqual(@as(u8, 1), decode(?u8, &.{0x01}));
 }
 
-fn decodeVector(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator) error{ Invalid, EndOfStream }!T {
+fn decodeVector(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) error{ Invalid, EndOfStream }!T {
     const format = Spec.Format.decode(try reader.readByte());
     const expected_format_len = @typeInfo(T).vector.len;
     switch (format) {
@@ -868,7 +915,7 @@ fn decodeVector(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc:
     var res: T = undefined;
     const Child = @typeInfo(T).vector.child;
     for (0..expected_format_len) |i| {
-        res[i] = try decodeAny(Child, reader, seeker, maybe_alloc);
+        res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
     }
     return res;
 }
@@ -877,36 +924,61 @@ test "decode vector" {
     try std.testing.expectEqual(@Vector(3, bool){ true, false, true }, decode(@Vector(3, bool), &.{ 0b10010011, 0xc3, 0xc2, 0xc3 }));
 }
 
-fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator) error{ Invalid, EndOfStream }!T {
+fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) error{ Invalid, EndOfStream }!T {
+    const has_sentinel = @typeInfo(T).array.sentinel != null;
+    const Child = @typeInfo(T).array.child;
     const format = Spec.Format.decode(try reader.readByte());
     comptime var expected_format_len = @typeInfo(T).array.len;
     if (@typeInfo(T).array.sentinel) |_| expected_format_len += 1;
     switch (format) {
-        .fixarray => |fix_array| {
-            if (fix_array.len != expected_format_len) {
-                return error.Invalid;
-            }
-        },
-        .array_16 => {
-            if (try reader.readInt(u16, .big) != expected_format_len)
-                return error.Invalid;
-        },
-        .array_32 => {
-            if (try reader.readInt(u32, .big) != expected_format_len)
-                return error.Invalid;
-        },
+        .fixarray, .array_16, .array_32 => {},
+        .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => if (Child != u8) return error.Invalid,
         else => return error.Invalid,
     }
+    const len = switch (format) {
+        .fixarray => |fmt| fmt.len,
+        .array_16 => try reader.readInt(u16, .big),
+        .array_32 => try reader.readInt(u32, .big),
+        .fixstr => |fmt| fmt.len,
+        .bin_8, .str_8 => try reader.readInt(u8, .big),
+        .bin_16, .str_16 => try reader.readInt(u16, .big),
+        .bin_32, .str_32 => try reader.readInt(u32, .big),
+        else => unreachable,
+    };
+    if (len != expected_format_len) return error.Invalid;
     var res: T = undefined;
-    const Child = @typeInfo(T).array.child;
+    const decode_len = len - @as(comptime_int, @intFromBool(has_sentinel));
 
-    const decode_len = @typeInfo(T).array.len;
-    for (0..decode_len) |i| {
-        res[i] = try decodeAny(Child, reader, seeker, maybe_alloc);
-    }
-    if (@typeInfo(T).array.sentinel) |sentinel| {
-        const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-        if (try decodeAny(Child, reader, seeker, maybe_alloc) != sentinel_value) return error.Invalid;
+    switch (Child) {
+        u8 => switch (format) {
+            .fixarray, .array_16, .array_32 => {
+                for (0..decode_len) |i| {
+                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+                }
+            },
+            .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
+                for (0..decode_len) |i| {
+                    res[i] = try reader.readByte();
+                }
+                if (@typeInfo(T).array.sentinel) |sentinel| {
+                    const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+                    if (try reader.readByte() != sentinel_value) return error.Invalid;
+                }
+            },
+            else => unreachable,
+        },
+        else => switch (format) {
+            .fixarray, .array_16, .array_32 => {
+                for (0..decode_len) |i| {
+                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+                }
+                if (@typeInfo(T).array.sentinel) |sentinel| {
+                    const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+                    if (try decodeAny(Child, reader, seeker, maybe_alloc, format_options) != sentinel_value) return error.Invalid;
+                }
+            },
+            else => unreachable,
+        },
     }
     return res;
 }

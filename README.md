@@ -56,8 +56,8 @@ Note: pointer types require allocation to decode.
 You can customize how types are formatted in message pack:
 
 | Zig Type | Available Encodings |
-| -------- | ------------------------ |
-| `enum`   | string, int              |
+| -------- | ------------------- |
+| `enum`   | string, int         |
 
 See [examples](examples/example_formats.zig) for how to do it.
 

@@ -125,8 +125,3 @@ And import the library to begin using it:
 ```zig
 const lizpack = @import("lizpack");
 ```
-
-## Coming Soon
-
-1. Explicit allocation to support variable length and large messages (slices and pointers).
-1. Customization of encoding / decoding (structs as arrays instead of maps, enums as strings, etc.).

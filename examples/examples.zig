@@ -65,7 +65,7 @@ test "customize encoding" {
         .uuid = .{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
         .message = "Your software is horrible!",
     };
-    const slice: []u8 = try lizpack.encode(expected, &out);
+    const slice: []u8 = try lizpack.encodeCustom(expected, &out, .{ .format = CustomerComplaint.format });
     const decoded = try lizpack.decodeCustomAlloc(std.testing.allocator, CustomerComplaint, slice, .{
         .format = CustomerComplaint.format,
     });

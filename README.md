@@ -30,24 +30,30 @@ const CustomerComplaint = struct {
 
 ## Default Formats
 
-| Zig Type         | Encodes As MessagePack Type            | Decodes From MessagePack Type                   |
-| ---------------- | -------------------------------------- | ----------------------------------------------- |
-| `bool`           | bool                                   | bool                                            |
-| `null`           | nil                                    | nil                                             |
-| `u3`,`u45`, `i6` | integer                                | integer                                         |
-| `?T`             | nil or T                               | nil or T                                        |
-| `enum`           | integer                                | integer                                         |
-| `[N]T`           | N length array of T                    | N length array of T                             |
-| `[N:x]T`         | N+1 length array of T ending in x      | N+1 length array of T ending in x               |
-| `[N]u8`          | bin                                    | bin                                             |
-| `@Vector(N, T)`  | N length array of T                    | N length array of T                             |
-| `struct`         | map, str (order declared): field value | map, str (unordered): field value               |
-| `union (enum)`   | active field                           | first successful field (ordered by declaration) |
-| `[]T`            | N length array of T                    | N length array of T                             |
-| `[:x]T`          | N + 1 length array of T ending in x    | N + 1 length array of T ending in x             |
-| `[]u8`           | bin                                    | bin                                             |
-| `[:x]u8`         | bin ending in x                        | bin ending in x                                 |
-| `*T`             | T                                      | T                                               |
+| Zig Type         | MessagePack Type                    |
+| ---------------- | ----------------------------------- |
+| `bool`           | bool                                |
+| `null`           | nil                                 |
+| `u3`,`u45`, `i6` | integer                             |
+| `?T`             | nil or T                            |
+| `enum`           | integer                             |
+| `[N]T`           | N length array of T                 |
+| `[N:x]T`         | N+1 length array of T ending in x   |
+| `[N]u8`          | bin                                 |
+| `@Vector(N, T)`  | N length array of T                 |
+| `struct`         | map, str: field value               |
+| `union (enum)`   | map (single key-value pair)         |
+| `[]T`            | N length array of T                 |
+| `[:x]T`          | N + 1 length array of T ending in x |
+| `[]u8`           | bin                                 |
+| `[:x]u8`         | bin ending in x                     |
+| `*T`             | T                                   |
+
+Unsupported types:
+
+| Zig Type           | Reason                                                       |
+| ------------------ | ------------------------------------------------------------ |
+| `union` (untagged) | Decoding cannot determine active field, and neither can you. |
 
 Note: pointer types require allocation to decode.
 
@@ -55,13 +61,14 @@ Note: pointer types require allocation to decode.
 
 You can customize how types are formatted in message pack:
 
-| Zig Type       | Available Encodings |
-| -------------- | ------------------- |
-| `enum`         | string, int         |
-| `[]u8`,`[N]u8` | string, int, array  |
-|                |                     |
+| Zig Type       | Available Encodings                       |
+| -------------- | ----------------------------------------- |
+| `enum`         | string, int                               |
+| `[]u8`,`[N]u8` | string, int, array                        |
+| `struct`       | map, array                                |
+| `union (enum)` | map (single key-value pair), active field |
 
-See [examples](examples/example_formats.zig) for how to do it.
+See [examples](examples/examples.zig) for how to do it.
 
 ## Examples
 

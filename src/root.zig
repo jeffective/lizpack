@@ -227,13 +227,18 @@ test "round trip slice" {
 }
 
 fn encodeUnion(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
-    _ = @typeInfo(@TypeOf(value)).@"union".tag_type orelse @compileError("Unions require a tag type.");
-    const union_payload = switch (value) {
-        inline else => |payload| payload,
-    };
-    switch (format_options.layout) {
-        .map => unreachable, // TODO
-        .active_field => try encodeAny(union_payload, writer, seeker, format_options),
+    comptime assert(@typeInfo(@TypeOf(value)).@"union".tag_type != null); // unions require a tag type
+    switch (value) {
+        inline else => |payload, tag| {
+            switch (format_options.layout) {
+                .map => {
+                    try encodeMapFormat(1, writer);
+                    try encodeStr(@tagName(tag), writer);
+                },
+                .active_field => {},
+            }
+            try encodeAny(payload, writer, seeker, format_options);
+        },
     }
 }
 
@@ -242,6 +247,16 @@ test "round trip union" {
     const expected: union(enum) { foo: u8, bar: u16 } = .{ .foo = 3 };
     const slice = try encode(expected, &out);
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
+}
+
+test "round trip union map" {
+    var out: [1000]u8 = undefined;
+    const expected: union(enum) { foo: u8, bar: u16, bazzz: u16 } = .{ .foo = 3 };
+    const slice = try encodeCustom(expected, &out, .{ .format = .{ .layout = .map } });
+    try std.testing.expectEqual(
+        expected,
+        decodeCustom(@TypeOf(expected), slice, .{ .format = .{ .layout = .map } }),
+    );
 }
 
 fn encodeEnum(value: anytype, writer: anytype, format_options: anytype) !void {
@@ -763,29 +778,75 @@ test "decode slice sentinel" {
 // TODO: refactor this to make it less garbage when inline for loops can have continue.
 // https://github.com/ziglang/zig/issues/9524
 fn decodeUnion(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) !T {
+    comptime assert(@typeInfo(T).@"union".tag_type != null); // Unions require a tag type
     switch (format_options.layout) {
-        .map => unreachable, // TODO
-        .active_field => {},
+        .map => {
+            const format_byte = try reader.readByte();
+            if (format_byte != (Spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode()) {
+                return error.Invalid;
+            }
+            var field_name_buffer: [largestFieldNameLength(T)]u8 = undefined;
+            const format_key = Spec.Format.decode(try reader.readByte());
+            const name_len = switch (format_key) {
+                .bin_8, .str_8 => try reader.readInt(u8, .big),
+                .bin_16, .str_16 => try reader.readInt(u16, .big),
+                .bin_32, .str_32 => try reader.readInt(u32, .big),
+                .fixstr => |val| val.len,
+                else => return error.Invalid,
+            };
+            if (name_len > largestFieldNameLength(T)) return error.Invalid;
+            assert(name_len <= largestFieldNameLength(T));
+            try reader.readNoEof(field_name_buffer[0..name_len]);
+
+            inline for (comptime std.meta.fieldNames(T), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, format_option_field_name| {
+                if (std.mem.eql(u8, field_name, field_name_buffer[0..name_len])) {
+                    const field_value = try decodeAny(
+                        @FieldType(T, field_name),
+                        reader,
+                        seeker,
+                        maybe_alloc,
+                        @field(format_options.fields, format_option_field_name),
+                    );
+                    return @unionInit(T, field_name, field_value);
+                }
+            } else {
+                return error.Invalid;
+            }
+            unreachable;
+        },
+        .active_field => {
+            const starting_position = try seeker.getPos();
+            inline for (comptime std.meta.fields(T), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |union_field, union_field_format_name| inlinecont: {
+                const res = decodeAny(union_field.type, reader, seeker, maybe_alloc, @field(format_options.fields, union_field_format_name)) catch |err| switch (err) {
+                    error.Invalid, error.EndOfStream => {
+                        try seeker.seekTo(starting_position);
+                        break :inlinecont;
+                    },
+                };
+                return @unionInit(T, union_field.name, res);
+            } else {
+                return error.Invalid;
+            }
+        },
     }
-    _ = @typeInfo(T).@"union".tag_type orelse @compileError("Unions require a tag type.");
-    const starting_position = try seeker.getPos();
-    const rval = rval: inline for (comptime std.meta.fields(T), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |union_field, union_field_format_name| {
-        const res = decodeAny(union_field.type, reader, seeker, maybe_alloc, @field(format_options.fields, union_field_format_name)) catch |err| switch (err) {
-            error.Invalid, error.EndOfStream => |err2| blk: {
-                try seeker.seekTo(starting_position);
-                break :blk err2;
-            },
-        };
-        if (res) |good_res| {
-            break :rval @unionInit(T, union_field.name, good_res);
-        } else |err| switch (err) {
-            error.Invalid, error.EndOfStream => {},
-        }
-    } else {
-        return error.Invalid;
-    };
-    return rval;
+    unreachable;
 }
+
+// fn decodeUnion(comptime T: type, fbs: *FBS) !T {
+//     const starting_position = try fbs.getPos();
+//     inline for (comptime std.meta.fields(T)) |union_field| inlineCont: {
+//         const res = decodeFbs(union_field.type, fbs) catch |err| switch (err) {
+//             error.Invalid, error.EndOfStream => {
+//                 try fbs.seekTo(starting_position);
+//                 break :inlineCont;
+//             },
+//         };
+//         return res;
+//     } else {
+//         return error.Invalid;
+//     }
+//     unreachable;
+// }
 
 test "decode union" {
     const MyUnion = union(enum) {
@@ -793,9 +854,9 @@ test "decode union" {
         my_bool: bool,
     };
 
-    try std.testing.expectEqual(MyUnion{ .my_bool = false }, try decode(MyUnion, &.{0xc2}));
-    try std.testing.expectEqual(MyUnion{ .my_u8 = 0 }, try decode(MyUnion, &.{0x00}));
-    try std.testing.expectError(error.Invalid, decode(MyUnion, &.{0xc4}));
+    try std.testing.expectEqual(MyUnion{ .my_bool = false }, try decodeCustom(MyUnion, &.{0xc2}, .{ .format = .{ .layout = .active_field } }));
+    try std.testing.expectEqual(MyUnion{ .my_u8 = 0 }, try decodeCustom(MyUnion, &.{0x00}, .{ .format = .{ .layout = .active_field } }));
+    try std.testing.expectError(error.Invalid, decodeCustom(MyUnion, &.{0xc4}, .{ .format = .{ .layout = .active_field } }));
 }
 
 fn decodeEnum(comptime T: type, reader: anytype, format_options: anytype) !T {
@@ -1306,7 +1367,7 @@ pub fn FormatOptions(comptime T: type) type {
             fields: FieldStructStrategy(T, FormatOptions, FormatOptionsDefault) = .{},
         },
         .@"union" => struct {
-            layout: enum { map, active_field } = .active_field,
+            layout: enum { map, active_field } = .map,
             fields: UnionFieldStructStrategy(T, FormatOptions, FormatOptionsDefault) = .{},
         },
         .@"enum" => enum {

@@ -16,20 +16,27 @@ pub fn EncodeError(comptime T: type) type {
     }
 }
 
+/// Encode the value to MessagePack bytes.
+pub fn encode(value: anytype, out: []u8) EncodeError(@TypeOf(value))![]u8 {
+    return try encodeCustom(value, out, .{});
+}
+
+/// Decode from MessagePack bytes to stack allocated value.
+pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {
+    return try decodeCustom(T, in, .{});
+}
+
 pub fn EncodeOptions(comptime T: type) type {
     return struct {
         format: FormatOptions(T) = FormatOptionsDefault(T),
     };
 }
 
+/// Encode the value to MessagePack bytes with format customizations.
 pub fn encodeCustom(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))![]u8 {
     var fbs = std.io.fixedBufferStream(out);
     try encodeAny(value, fbs.writer(), fbs.seekableStream(), options.format);
     return fbs.getWritten();
-}
-
-pub fn encode(value: anytype, out: []u8) EncodeError(@TypeOf(value))![]u8 {
-    return try encodeCustom(value, out, .{});
 }
 
 pub fn DecodeOptions(comptime T: type) type {
@@ -38,6 +45,7 @@ pub fn DecodeOptions(comptime T: type) type {
     };
 }
 
+/// Decode from MessagePack bytes to stack allocated value with format customizations.
 pub fn decodeCustom(comptime T: type, in: []const u8, options: DecodeOptions(T)) error{Invalid}!T {
     var fbs = std.io.fixedBufferStream(in);
     const res = decodeAny(T, fbs.reader(), fbs.seekableStream(), null, options.format) catch return error.Invalid;
@@ -45,10 +53,7 @@ pub fn decodeCustom(comptime T: type, in: []const u8, options: DecodeOptions(T))
     return res;
 }
 
-pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {
-    return try decodeCustom(T, in, .{});
-}
-
+/// Call deinit() on this to free it.
 pub fn Decoded(comptime T: type) type {
     return struct {
         arena: *std.heap.ArenaAllocator,
@@ -61,6 +66,14 @@ pub fn Decoded(comptime T: type) type {
     };
 }
 
+/// Decode from MessagePack bytes using an allocator. Allocator is required for
+/// pointer types (slices, pointers, etc.)
+pub fn decodeAlloc(allocator: std.mem.Allocator, comptime T: type, in: []const u8) error{ OutOfMemory, Invalid }!Decoded(T) {
+    return try decodeCustomAlloc(allocator, T, in, .{});
+}
+
+/// Decode from MessagePack bytes using an allocator. Allocator is required for
+/// pointer types (slices, pointers, etc.)
 pub fn decodeCustomAlloc(allocator: std.mem.Allocator, comptime T: type, in: []const u8, options: DecodeOptions(T)) error{ OutOfMemory, Invalid }!Decoded(T) {
     var fbs = std.io.fixedBufferStream(in);
     const arena = try allocator.create(std.heap.ArenaAllocator);
@@ -74,10 +87,6 @@ pub fn decodeCustomAlloc(allocator: std.mem.Allocator, comptime T: type, in: []c
     };
     if (fbs.pos != fbs.buffer.len) return error.Invalid;
     return Decoded(T){ .arena = arena, .value = res };
-}
-
-pub fn decodeAlloc(allocator: std.mem.Allocator, comptime T: type, in: []const u8) error{ OutOfMemory, Invalid }!Decoded(T) {
-    return try decodeCustomAlloc(allocator, T, in, .{});
 }
 
 test "byte stream too long returns error" {
@@ -1211,3 +1220,60 @@ test "encode options 2" {
         },
     }));
 }
+
+// Returns longest possible length of MessagePack encoding for type T.
+// Raises compile error for unbounded types (slices).
+// pub fn largestEncodedSize(comptime T: type, options: EncodeOptions(T)) comptime_int {
+
+//     return switch (@typeInfo(T)) {
+//         .bool => 1, // see Spec, bools are one byte
+//         .int => switch (@typeInfo(T).int.signedness) {
+//             .unsigned => switch (@typeInfo(T).int.bits) {
+//                 0...7 => 1, // pos fix int
+//                 8 => 2, // uint 8
+//                 9...16 => 3, // uint 16
+//                 12...32 => 5, // uint 32
+//                 33...64 => 9, // uint 64
+//                 else => unreachable, // message pack supports only up to 64 bit ints
+//             },
+//             .signed => switch (@typeInfo(T).int.bits) {
+//                 0...8 => 2, // int 8 TODO: optimize using pos/neg fix int?
+//                 9...16 => 3, // int 16,
+//                 17...32 => 5, // int 32
+//                 33...64 => 9, // int 64
+//                 else => unreachable, // message pack supports only up to 64 bit ints
+//             },
+//         },
+//         .float => switch (@typeInfo(T).float.bits) {
+//             32 => 5, // f32
+//             64 => 9, // f64
+//             else => unreachable, // message pack supports only 32 and 64 bit floats
+//         },
+//         .array => blk: {
+//             // TODO: optimize array size length estimate
+//             // assume array 32, str bin etc will be smaller
+//             const format = 1;
+//             const format_len = 4;
+//             break :blk format + format_len + @typeInfo(T).array.len * largestEncodedSize(@typeInfo(T).array.child, options);
+//             comptime var size = 0;
+//             for (0..@typeInfo(T).array.len) {
+
+//             }
+//         },
+//         .optional => containsSlice(@typeInfo(T).optional.child),
+//         .vector => false,
+//         .@"struct" => blk: inline for (@typeInfo(T).@"struct".fields) |field| {
+//             if (containsSlice(field.type)) break :blk true;
+//         } else break :blk false,
+//         .@"enum" => false,
+//         .@"union" => blk: inline for (@typeInfo(T).@"union".fields) |field| {
+//             if (containsSlice(field.type)) break :blk true;
+//         } else break :blk false,
+//         .pointer => switch (@typeInfo(T).pointer.size) {
+//             .One => containsSlice(@typeInfo(T).pointer.child),
+//             .Slice => true,
+//             else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
+//         },
+//         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
+//     };
+// }

@@ -676,6 +676,17 @@ test "decode slice invalid" {
     try std.testing.expectError(error.Invalid, decodeAlloc(std.testing.allocator, []const u8, &.{ 0b10100010, 'f', 'o', 'o' }));
 }
 
+test "decode slice sentinel invalid" {
+    try std.testing.expectError(error.Invalid, decodeAlloc(std.testing.allocator, [:0]const u8, &.{ 0b10100100, 'f', 'o', 'o', 1 }));
+}
+
+test "decode slice sentinel" {
+    const decoded = try decodeAlloc(std.testing.allocator, [:0]const u8, &.{ 0b10100100, 'f', 'o', 'o', 0 });
+    defer decoded.deinit();
+    const expected: [:0]const u8 = "foo";
+    try std.testing.expectEqualSlices(u8, expected, decoded.value);
+}
+
 // TODO: refactor this to make it less garbage when inline for loops can have continue.
 // https://github.com/ziglang/zig/issues/9524
 fn decodeUnion(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) !T {
@@ -988,8 +999,12 @@ test "decode array" {
     try std.testing.expectEqual([4]u8{ 0, 1, 2, 3 }, decode([4]u8, &.{ 0b10010100, 0x00, 0x01, 0x02, 0x03 }));
 }
 
-test "decode array senstinel" {
+test "decode array sentinel" {
     try std.testing.expectEqual([3:false]bool{ true, false, true }, decode([3:false]bool, &.{ 0b10010100, 0xc3, 0xc2, 0xc3, 0xc2 }));
+}
+
+test "decode array sentinel invalid" {
+    try std.testing.expectError(error.Invalid, decode([3:false]bool, &.{ 0b10010100, 0xc3, 0xc2, 0xc3, 0xc3 }));
 }
 
 fn decodeBool(reader: anytype) error{ Invalid, EndOfStream }!bool {

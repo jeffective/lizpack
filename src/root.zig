@@ -1164,10 +1164,26 @@ fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: 
     const format = Spec.Format.decode(try reader.readByte());
     comptime var expected_format_len = @typeInfo(T).array.len;
     if (@typeInfo(T).array.sentinel) |_| expected_format_len += 1;
-    switch (format) {
-        .fixarray, .array_16, .array_32 => {},
-        .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => if (Child != u8) return error.Invalid,
-        else => return error.Invalid,
+    if (Child == u8) {
+        switch (format_options) {
+            .bin => switch (format) {
+                .bin_8, .bin_16, .bin_32 => {},
+                else => return error.Invalid,
+            },
+            .str => switch (format) {
+                .fixstr, .str_8, .str_16, .str_32 => {},
+                else => return error.Invalid,
+            },
+            .array => switch (format) {
+                .fixarray, .array_16, .array_32 => {},
+                else => return error.Invalid,
+            },
+        }
+    } else {
+        switch (format) {
+            .fixarray, .array_16, .array_32 => {},
+            else => return error.Invalid,
+        }
     }
     const len = switch (format) {
         .fixarray => |fmt| fmt.len,
@@ -1219,7 +1235,7 @@ fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: 
 
 test "decode array" {
     try std.testing.expectEqual([3]bool{ true, false, true }, decode([3]bool, &.{ 0b10010011, 0xc3, 0xc2, 0xc3 }));
-    try std.testing.expectEqual([4]u8{ 0, 1, 2, 3 }, decode([4]u8, &.{ 0b10010100, 0x00, 0x01, 0x02, 0x03 }));
+    try std.testing.expectEqual([4]u8{ 0, 1, 2, 3 }, decodeCustom([4]u8, &.{ 0b10010100, 0x00, 0x01, 0x02, 0x03 }, .{ .format = .array }));
 }
 
 test "decode array sentinel" {

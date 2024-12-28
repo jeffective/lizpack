@@ -45,3 +45,23 @@ test {
     const slice: []u8 = try lizpack.encode(false, &out);
     try std.testing.expectEqualSlices(u8, &.{0xc2}, slice);
 }
+
+test "customize encoding" {
+    const CustomerComplaint = struct {
+        uuid: [16]u8,
+        message: []const u8,
+    };
+
+    var out: [1000]u8 = undefined;
+    const expected: CustomerComplaint = .{
+        .uuid = .{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
+        .message = "Your software is horrible!",
+    };
+    const slice: []u8 = try lizpack.encode(expected, &out);
+    const decoded = try lizpack.decodeCustomAlloc(std.testing.allocator, CustomerComplaint, slice, .{ .format = .{ .fields = .{ .uuid = .bin } } });
+    defer decoded.deinit();
+    try std.testing.expectEqualDeep(
+        expected,
+        decoded.value,
+    );
+}

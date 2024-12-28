@@ -148,7 +148,7 @@ fn encodeSlice(value: anytype, writer: anytype, seeker: anytype, format_options:
                 else => return error.SliceLenTooLarge,
             },
             .str => switch (encoded_len) {
-                0...std.math.maxInt(u5) => .{ .fix_str = .{ .len = @intCast(encoded_len) } },
+                0...std.math.maxInt(u5) => .{ .fixstr = .{ .len = @intCast(encoded_len) } },
                 std.math.maxInt(u5) + 1...std.math.maxInt(u8) => .{ .str_8 = {} },
                 std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .str_16 = {} },
                 std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .str_32 = {} },
@@ -368,7 +368,7 @@ fn encodeArray(value: anytype, writer: anytype, seeker: anytype, format_options:
                 else => @compileError("MessagePack only supports up to array length max u32."),
             },
             .str => switch (encoded_len) {
-                0...std.math.maxInt(u5) => .{ .fix_str = .{ .len = @intCast(encoded_len) } },
+                0...std.math.maxInt(u5) => .{ .fixstr = .{ .len = @intCast(encoded_len) } },
                 std.math.maxInt(u5) + 1...std.math.maxInt(u8) => .{ .str_8 = {} },
                 std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .str_16 = {} },
                 std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .str_32 = {} },
@@ -559,7 +559,7 @@ fn decodeAny(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: an
     unreachable;
 }
 
-fn decodePointer(comptime T: type, reader: anytype, seeker: anytype, alloc: std.mem.Allocator, format_options: anytype) !T {
+fn decodePointer(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: anytype) !T {
     switch (@typeInfo(T).pointer.size) {
         .One => {
             const Child = @typeInfo(T).pointer.child;
@@ -579,7 +579,7 @@ test "decode pointer one" {
     try std.testing.expectEqual(true, decoded.value.*);
 }
 
-fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: std.mem.Allocator, format_options: anytype) !T {
+fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: anytype) !T {
     const has_sentinel = @typeInfo(T).pointer.sentinel != null;
     const Child = @typeInfo(T).pointer.child;
     const format = Spec.Format.decode(try reader.readByte());
@@ -689,7 +689,7 @@ test "decode slice sentinel" {
 
 // TODO: refactor this to make it less garbage when inline for loops can have continue.
 // https://github.com/ziglang/zig/issues/9524
-fn decodeUnion(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) !T {
+fn decodeUnion(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) !T {
     switch (format_options.layout) {
         .map => unreachable, // TODO
         .active_field => {},
@@ -772,7 +772,7 @@ test "largest field name length" {
     try std.testing.expectEqual(4, largestFieldNameLength(Foo));
 }
 
-fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) !T {
+fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) !T {
     switch (format_options.layout) {
         .map => {},
         .array => unreachable, // TODO
@@ -782,7 +782,7 @@ fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc:
     const num_struct_fields = @typeInfo(T).@"struct".fields.len;
 
     switch (format) {
-        .fixmap => |fix_map| if (fix_map.n_elements != num_struct_fields) return error.Invalid,
+        .fixmap => |fixmap| if (fixmap.n_elements != num_struct_fields) return error.Invalid,
         .map_16 => if (try reader.readInt(u16, .big) != num_struct_fields) return error.Invalid,
         .map_32 => if (try reader.readInt(u32, .big) != num_struct_fields) return error.Invalid,
         else => return error.Invalid,

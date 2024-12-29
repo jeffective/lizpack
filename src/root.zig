@@ -42,6 +42,9 @@ pub fn encodeCustom(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(va
     return fbs.getWritten();
 }
 
+/// Encode the value to MessagePack bytes in a bounded array.
+/// Unbounded size types (slices) are not supported.
+/// No errors though!
 pub fn encodeCustomBounded(value: anytype, comptime options: EncodeOptions(@TypeOf(value))) std.BoundedArray(u8, largestEncodedSize(@TypeOf(value), options.format)) {
     var res = std.BoundedArray(u8, largestEncodedSize(@TypeOf(value), options.format)){};
     var fbs = std.io.fixedBufferStream(res.buffer[0..]);

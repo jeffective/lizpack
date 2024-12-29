@@ -3,6 +3,7 @@
 A MessagePack Library for Zig
 
 1. Zero allocations.
+1. Zero encoding errors.
 1. Simple control flow.
 1. All messages validated for you.
 

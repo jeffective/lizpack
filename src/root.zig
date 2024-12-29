@@ -36,7 +36,18 @@ pub fn EncodeOptions(comptime T: type) type {
 pub fn encodeCustom(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))![]u8 {
     var fbs = std.io.fixedBufferStream(out);
     try encodeAny(value, fbs.writer(), fbs.seekableStream(), options.format);
+    if (comptime !containsSlice(@TypeOf(value))) {
+        assert(largestEncodedSize(@TypeOf(value), options.format) >= fbs.getWritten().len);
+    }
     return fbs.getWritten();
+}
+
+pub fn encodeCustomBounded(value: anytype, comptime options: EncodeOptions(@TypeOf(value))) std.BoundedArray(u8, largestEncodedSize(@TypeOf(value), options.format)) {
+    var res = std.BoundedArray(u8, largestEncodedSize(@TypeOf(value), options.format)){};
+    var fbs = std.io.fixedBufferStream(res.buffer[0..]);
+    encodeAny(value, fbs.writer(), fbs.seekableStream(), options.format) catch unreachable;
+    res.len = fbs.getWritten().len;
+    return res;
 }
 
 pub fn DecodeOptions(comptime T: type) type {
@@ -87,6 +98,106 @@ pub fn decodeCustomAlloc(allocator: std.mem.Allocator, comptime T: type, in: []c
     };
     if (fbs.pos != fbs.buffer.len) return error.Invalid;
     return Decoded(T){ .arena = arena, .value = res };
+}
+
+/// Returns longest possible length of MessagePack encoding for type T.
+/// Raises compile error for unbounded types (slices).
+pub fn largestEncodedSize(comptime T: type, format_options: FormatOptions(T)) usize {
+    return switch (@typeInfo(T)) {
+        .bool => 1, // see Spec, bools are one byte
+        .int => switch (@typeInfo(T).int.signedness) {
+            .unsigned => switch (@typeInfo(T).int.bits) {
+                0...7 => 1, // pos fix int
+                8 => 2, // uint 8
+                9...16 => 3, // uint 16
+                17...32 => 5, // uint 32
+                33...64 => 9, // uint 64
+                else => unreachable, // message pack supports only up to 64 bit ints
+            },
+            .signed => switch (@typeInfo(T).int.bits) {
+                0...8 => 2, // int 8 TODO: optimize using pos/neg fix int?
+                9...16 => 3, // int 16,
+                17...32 => 5, // int 32
+                33...64 => 9, // int 64
+                else => unreachable, // message pack supports only up to 64 bit ints
+            },
+        },
+        .float => switch (@typeInfo(T).float.bits) {
+            32 => 5, // f32
+            64 => 9, // f64
+            else => unreachable, // message pack supports only 32 and 64 bit floats
+        },
+        .array => switch (@typeInfo(T).array.child) {
+            u8 => switch (format_options) {
+                .bin, .str => 5 + @typeInfo(T).array.len, // TODO: don't assume bin_32 and str_32
+                .array => 5 + 2 * @typeInfo(T).array.len, // TODO: don't assume array_32
+            },
+            else => 5 + @typeInfo(T).array.len * largestEncodedSize(@typeInfo(T).array.child, format_options),
+        },
+        .optional => largestEncodedSize(@typeInfo(T).optional.child, format_options),
+        .vector => 5 + largestEncodedSize(@typeInfo(T).vector.child, format_options) * @typeInfo(T).vector.len, // TODO: don't assume array_32
+        .@"struct" => switch (format_options.layout) {
+            .map => blk: {
+                var size: usize = 5; // TODO: don't assume map_32
+                inline for (comptime std.meta.fields(T), comptime std.meta.fields(@TypeOf(format_options.fields))) |field, field_option| {
+                    size += 5 + field.name.len; // TODO: don't assume str_32
+                    size += largestEncodedSize(field.type, @field(format_options.fields, field_option.name));
+                }
+                break :blk size;
+            },
+            .array => blk: {
+                var size: usize = 5; // TODO: don't assume array_32
+                inline for (comptime std.meta.fields(T), comptime std.meta.fields(@TypeOf(format_options.fields))) |field, field_option| {
+                    size += largestEncodedSize(field.type, @field(format_options.fields, field_option.name));
+                }
+                break :blk size;
+            },
+        },
+        .@"enum" => switch (format_options) {
+            .str => blk: {
+                comptime assert(@typeInfo(T).@"enum".is_exhaustive); // TODO: only exhaustive enums supported
+                break :blk 5 + largestFieldNameLength(T); // TODO: don't assume str_32
+            },
+            .int => blk: {
+                const TagInt = @typeInfo(T).@"enum".tag_type;
+                break :blk largestEncodedSize(TagInt, void{});
+            },
+        },
+        .@"union" => switch (format_options.layout) {
+            .map => blk: {
+                const size: usize = 1; // assumes fixmap
+                var largest_field_size: usize = 0;
+                inline for (std.meta.fields(T), std.meta.fields(@TypeOf(format_options.fields))) |field, field_option| {
+                    const field_size: usize = 5 + field.name.len + largestEncodedSize(field.type, @field(format_options.fields, field_option.name)); // TODO: don't assume str_32
+                    if (field_size > largest_field_size) {
+                        largest_field_size = field_size;
+                    }
+                }
+                break :blk size + largest_field_size;
+            },
+            .active_field => blk: {
+                var largest_field_size: usize = 0;
+                inline for (std.meta.fields(T), std.meta.fields(@TypeOf(format_options.fields))) |field, field_option| {
+                    const field_size = 5 + field.name.len + largestEncodedSize(field.type, @field(format_options.fields, field_option.name)); // TODO: don't assume str_32
+                    if (field_size > largest_field_size) {
+                        largest_field_size = field_size;
+                    }
+                }
+                break :blk largest_field_size;
+            },
+        },
+        .pointer => switch (@typeInfo(T).pointer.size) {
+            .One => largestEncodedSize(@typeInfo(T).pointer.child),
+            else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
+        },
+        else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
+    };
+}
+
+test "encode bounded" {
+    const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
+    const slice = encodeCustomBounded(expected, .{}).slice();
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice));
 }
 
 test "byte stream too long returns error" {
@@ -1450,60 +1561,3 @@ test "encode options 2" {
         },
     }));
 }
-
-// Returns longest possible length of MessagePack encoding for type T.
-// Raises compile error for unbounded types (slices).
-// pub fn largestEncodedSize(comptime T: type, options: EncodeOptions(T)) comptime_int {
-
-//     return switch (@typeInfo(T)) {
-//         .bool => 1, // see Spec, bools are one byte
-//         .int => switch (@typeInfo(T).int.signedness) {
-//             .unsigned => switch (@typeInfo(T).int.bits) {
-//                 0...7 => 1, // pos fix int
-//                 8 => 2, // uint 8
-//                 9...16 => 3, // uint 16
-//                 12...32 => 5, // uint 32
-//                 33...64 => 9, // uint 64
-//                 else => unreachable, // message pack supports only up to 64 bit ints
-//             },
-//             .signed => switch (@typeInfo(T).int.bits) {
-//                 0...8 => 2, // int 8 TODO: optimize using pos/neg fix int?
-//                 9...16 => 3, // int 16,
-//                 17...32 => 5, // int 32
-//                 33...64 => 9, // int 64
-//                 else => unreachable, // message pack supports only up to 64 bit ints
-//             },
-//         },
-//         .float => switch (@typeInfo(T).float.bits) {
-//             32 => 5, // f32
-//             64 => 9, // f64
-//             else => unreachable, // message pack supports only 32 and 64 bit floats
-//         },
-//         .array => blk: {
-//             // TODO: optimize array size length estimate
-//             // assume array 32, str bin etc will be smaller
-//             const format = 1;
-//             const format_len = 4;
-//             break :blk format + format_len + @typeInfo(T).array.len * largestEncodedSize(@typeInfo(T).array.child, options);
-//             comptime var size = 0;
-//             for (0..@typeInfo(T).array.len) {
-
-//             }
-//         },
-//         .optional => containsSlice(@typeInfo(T).optional.child),
-//         .vector => false,
-//         .@"struct" => blk: inline for (@typeInfo(T).@"struct".fields) |field| {
-//             if (containsSlice(field.type)) break :blk true;
-//         } else break :blk false,
-//         .@"enum" => false,
-//         .@"union" => blk: inline for (@typeInfo(T).@"union".fields) |field| {
-//             if (containsSlice(field.type)) break :blk true;
-//         } else break :blk false,
-//         .pointer => switch (@typeInfo(T).pointer.size) {
-//             .One => containsSlice(@typeInfo(T).pointer.child),
-//             .Slice => true,
-//             else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
-//         },
-//         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
-//     };
-// }

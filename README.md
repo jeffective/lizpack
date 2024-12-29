@@ -1,5 +1,7 @@
 # lizpack
 
+![Tests](https://github.com/kj4tmp/lizpack/actions/workflows/main.yml/badge.svg)
+
 A MessagePack Library for Zig
 
 1. Zero allocations.

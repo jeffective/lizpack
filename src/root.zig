@@ -728,12 +728,9 @@ test "encode int" {
 }
 
 fn encodeBool(value: anytype, writer: anytype) !void {
-    if (value) {
-        const format = Spec.Format{ .true = void{} };
-        try writer.writeByte(format.encode());
-    } else {
-        const format = Spec.Format{ .false = void{} };
-        try writer.writeByte(format.encode());
+    switch (value) {
+        true => try writer.writeByte((Spec.Format{ .true = {} }).encode()),
+        false => try writer.writeByte((Spec.Format{ .false = {} }).encode()),
     }
 }
 

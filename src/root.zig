@@ -1330,12 +1330,11 @@ test "decode array sentinel invalid" {
 
 fn decodeBool(reader: anytype) error{ Invalid, EndOfStream }!bool {
     const format = Spec.Format.decode(try reader.readByte());
-    switch (format) {
-        .true => return true,
-        .false => return false,
-        else => return error.Invalid,
-    }
-    unreachable;
+    return switch (format) {
+        .true => true,
+        .false => false,
+        else => error.Invalid,
+    };
 }
 
 test "decode bool" {
@@ -1356,7 +1355,7 @@ fn decodeInt(comptime T: type, reader: anytype) error{ Invalid, EndOfStream }!T 
         .int_8 => return cast(T, try reader.readInt(i8, .big)) orelse return error.Invalid,
         .int_16 => return cast(T, try reader.readInt(i16, .big)) orelse return error.Invalid,
         .int_32 => return cast(T, try reader.readInt(i32, .big)) orelse return error.Invalid,
-        .int_64 => return cast(T, try reader.readInt(u8, .big)) orelse return error.Invalid,
+        .int_64 => return cast(T, try reader.readInt(i64, .big)) orelse return error.Invalid,
         .negative_fixint => |val| return std.math.cast(T, val.value) orelse return error.Invalid,
         else => return error.Invalid,
     }

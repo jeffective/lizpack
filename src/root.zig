@@ -1508,7 +1508,7 @@ pub fn FormatOptionsDefault(comptime T: type) FormatOptions(T) {
         .int => void{},
         .float => void{},
         .array, .vector => switch (std.meta.Child(T)) {
-            u8 => .bin,
+            u8 => .str,
             else => FormatOptionsDefault(std.meta.Child(T)),
         },
         .optional => FormatOptionsDefault(@typeInfo(T).optional.child),

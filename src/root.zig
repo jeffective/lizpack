@@ -947,22 +947,6 @@ fn decodeUnion(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: 
     unreachable;
 }
 
-// fn decodeUnion(comptime T: type, fbs: *FBS) !T {
-//     const starting_position = try fbs.getPos();
-//     inline for (comptime std.meta.fields(T)) |union_field| inlineCont: {
-//         const res = decodeFbs(union_field.type, fbs) catch |err| switch (err) {
-//             error.Invalid, error.EndOfStream => {
-//                 try fbs.seekTo(starting_position);
-//                 break :inlineCont;
-//             },
-//         };
-//         return res;
-//     } else {
-//         return error.Invalid;
-//     }
-//     unreachable;
-// }
-
 test "decode union" {
     const MyUnion = union(enum) {
         my_u8: u8,
@@ -1411,10 +1395,6 @@ test "decode float" {
     try std.testing.expectEqual(@as(f64, 1.23), try decode(f64, &.{ 0xcb, 0x3f, 0xf3, 0xae, 0x14, 0x7a, 0xe1, 0x47, 0xae }, .{}));
 }
 
-test {
-    _ = std.testing.refAllDecls(@This());
-}
-
 fn FieldStructStrategy(comptime S: type, comptime DataStrategy: fn (comptime T: type) type, comptime field_default_strategy: ?fn (comptime T: type) type) type {
     var new_struct_fields: [@typeInfo(S).@"struct".fields.len]std.builtin.Type.StructField = undefined;
     for (&new_struct_fields, @typeInfo(S).@"struct".fields) |*new_struct_field, old_struct_field| {
@@ -1547,4 +1527,8 @@ test "encode options 2" {
             .fields = .{ .foo = void{}, .bar = .str },
         },
     }));
+}
+
+test {
+    _ = std.testing.refAllDecls(@This());
 }

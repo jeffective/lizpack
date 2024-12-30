@@ -12,9 +12,10 @@ A MessagePack Library for Zig
 A simple API:
 
 ```zig
-pub fn encode(value: anytype, out: []u8) error{NoSpaceLeft}![]u8 {...}
-
-pub fn decode(comptime T: type, in: []const u8) error{Invalid}!T {...}
+lizpack.encode(...)
+lizpack.encodeBounded(...)
+lizpack.decode(...)
+lizpack.decodeAlloc(...)
 ```
 
 Combines with your definition of your message structure:
@@ -96,8 +97,8 @@ test {
 
     var out: [1000]u8 = undefined;
     const expected: CustomerComplaint = .{ .user_id = 2345, .status = .reviewed };
-    const slice: []u8 = try lizpack.encode(expected, &out);
-    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), slice));
+    const slice: []u8 = try lizpack.encode(expected, &out, .{});
+    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), slice, .{}));
 }
 
 ```

@@ -1,7 +1,7 @@
 .{
     .name = "lizpack",
     .version = "0.3.0",
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.14.0-dev.2540+f857bf72e",
     .paths = .{
         "build.zig",
         "build.zig.zon",

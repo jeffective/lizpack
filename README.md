@@ -68,12 +68,12 @@ Note: pointer types require allocation to decode.
 
 You can customize how types are formatted in message pack:
 
-| Zig Type       | Available Encodings                       |
-| -------------- | ----------------------------------------- |
-| `enum`         | string, int                               |
-| `[]u8`,`[N]u8` | string, int, array                        |
-| `struct`       | map, array                                |
-| `union (enum)` | map (single key-value pair), active field |
+| Zig Type                         | Available Encodings                       |
+| -------------------------------- | ----------------------------------------- |
+| `enum`                           | string, int                               |
+| `[]u8`,`[N]u8`, `@Vector(N, u8)` | string, int, array                        |
+| `struct`                         | map, array                                |
+| `union (enum)`                   | map (single key-value pair), active field |
 
 See [examples](examples/examples.zig) for how to do it.
 

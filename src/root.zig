@@ -114,15 +114,21 @@ pub fn largestEncodedSize(comptime T: type, format_options: FormatOptions(T)) us
             64 => 9, // f64
             else => unreachable, // message pack supports only 32 and 64 bit floats
         },
-        .array => switch (@typeInfo(T).array.child) {
-            u8 => switch (format_options) {
-                .bin, .str => 5 + @typeInfo(T).array.len, // TODO: don't assume bin_32 and str_32
-                .array => 5 + 2 * @typeInfo(T).array.len, // TODO: don't assume array_32
-            },
-            else => 5 + @typeInfo(T).array.len * largestEncodedSize(@typeInfo(T).array.child, format_options),
+        .array, .vector => blk: {
+            const len = switch (@typeInfo(T)) {
+                .array => @typeInfo(T).array.len,
+                .vector => @typeInfo(T).vector.len,
+                else => unreachable,
+            };
+            break :blk switch (std.meta.Child(T)) {
+                u8 => switch (format_options) {
+                    .bin, .str => 5 + len, // TODO: don't assume bin_32 and str_32
+                    .array => 5 + 2 * len, // TODO: don't assume array_32
+                },
+                else => 5 + len * largestEncodedSize(std.meta.Child(T), format_options),
+            };
         },
         .optional => largestEncodedSize(@typeInfo(T).optional.child, format_options),
-        .vector => 5 + largestEncodedSize(@typeInfo(T).vector.child, format_options) * @typeInfo(T).vector.len, // TODO: don't assume array_32
         .@"struct" => switch (format_options.layout) {
             .map => blk: {
                 var size: usize = 5; // TODO: don't assume map_32
@@ -491,22 +497,37 @@ fn encodeStr(comptime str: []const u8, writer: anytype) !void {
 
 fn encodeVector(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
     const encoded_len = @typeInfo(@TypeOf(value)).vector.len;
-
-    const format: Spec.Format = switch (encoded_len) {
-        0...std.math.maxInt(u4) => .{ .fixarray = .{ .len = encoded_len } },
-        std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
-        std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
-        else => @compileError("MessagePack only supports up to array length max u32."),
+    const Child = @typeInfo(@TypeOf(value)).vector.child;
+    const format: Spec.Format = switch (Child) {
+        u8 => switch (format_options) {
+            .bin => try encodeBinStrArrayFormat(encoded_len, .bin, writer),
+            .str => try encodeBinStrArrayFormat(encoded_len, .str, writer),
+            .array => try encodeBinStrArrayFormat(encoded_len, .array, writer),
+        },
+        else => try encodeBinStrArrayFormat(encoded_len, .array, writer),
     };
-    try writer.writeByte(format.encode());
     switch (format) {
-        .fixarray => {},
-        .array_16 => try writer.writeInt(u16, encoded_len, .big),
-        .array_32 => try writer.writeInt(u32, encoded_len, .big),
+        .fixstr,
+        .str_8,
+        .str_16,
+        .str_32,
+        .bin_8,
+        .bin_16,
+        .bin_32,
+        => switch (Child) {
+            u8 => {
+                for (0..encoded_len) |i| {
+                    try writer.writeByte(value[i]);
+                }
+            },
+            else => unreachable,
+        },
+        .fixarray, .array_16, .array_32 => {
+            for (0..encoded_len) |i| {
+                try encodeAny(value[i], writer, seeker, format_options);
+            }
+        },
         else => unreachable,
-    }
-    for (0..encoded_len) |i| {
-        try encodeAny(value[i], writer, seeker, format_options);
     }
 }
 
@@ -547,43 +568,12 @@ fn encodeArray(value: anytype, writer: anytype, seeker: anytype, format_options:
 
     const format: Spec.Format = switch (Child) {
         u8 => switch (format_options) {
-            .bin => switch (encoded_len) {
-                0...std.math.maxInt(u8) => .{ .bin_8 = {} },
-                std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .bin_16 = {} },
-                std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .bin_32 = {} },
-                else => @compileError("MessagePack only supports up to array length max u32."),
-            },
-            .str => switch (encoded_len) {
-                0...std.math.maxInt(u5) => .{ .fixstr = .{ .len = @intCast(encoded_len) } },
-                std.math.maxInt(u5) + 1...std.math.maxInt(u8) => .{ .str_8 = {} },
-                std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .str_16 = {} },
-                std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .str_32 = {} },
-                else => @compileError("MessagePack only supports up to array length max u32."),
-            },
-            .array => switch (encoded_len) {
-                0...std.math.maxInt(u4) => .{ .fixarray = .{ .len = encoded_len } },
-                std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
-                std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
-                else => @compileError("MessagePack only supports up to array length max u32."),
-            },
+            .bin => try encodeBinStrArrayFormat(encoded_len, .bin, writer),
+            .str => try encodeBinStrArrayFormat(encoded_len, .str, writer),
+            .array => try encodeBinStrArrayFormat(encoded_len, .array, writer),
         },
-        else => switch (encoded_len) {
-            0...std.math.maxInt(u4) => .{ .fixarray = .{ .len = encoded_len } },
-            std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
-            std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
-            else => @compileError("MessagePack only supports up to array length max u32."),
-        },
+        else => try encodeBinStrArrayFormat(encoded_len, .array, writer),
     };
-
-    try writer.writeByte(format.encode());
-    switch (format) {
-        .fixarray, .fixstr => {},
-        .bin_8, .str_8 => try writer.writeInt(u8, @intCast(encoded_len), .big),
-        .bin_16, .str_16, .array_16 => try writer.writeInt(u16, @intCast(encoded_len), .big),
-        .bin_32, .str_32, .array_32 => try writer.writeInt(u32, @intCast(encoded_len), .big),
-        else => unreachable,
-    }
-
     switch (format) {
         .fixstr,
         .str_8,
@@ -613,6 +603,39 @@ fn encodeArray(value: anytype, writer: anytype, seeker: anytype, format_options:
         },
         else => unreachable,
     }
+}
+
+fn encodeBinStrArrayFormat(len: comptime_int, family: enum { bin, str, array }, writer: anytype) !Spec.Format {
+    const format: Spec.Format = switch (family) {
+        .bin => switch (len) {
+            0...std.math.maxInt(u8) => .{ .bin_8 = {} },
+            std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .bin_16 = {} },
+            std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .bin_32 = {} },
+            else => @compileError("MessagePack only supports up to array length max u32."),
+        },
+        .str => switch (len) {
+            0...std.math.maxInt(u5) => .{ .fixstr = .{ .len = @intCast(len) } },
+            std.math.maxInt(u5) + 1...std.math.maxInt(u8) => .{ .str_8 = {} },
+            std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .str_16 = {} },
+            std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .str_32 = {} },
+            else => @compileError("MessagePack only supports up to array length max u32."),
+        },
+        .array => switch (len) {
+            0...std.math.maxInt(u4) => .{ .fixarray = .{ .len = @intCast(len) } },
+            std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
+            std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
+            else => @compileError("MessagePack only supports up to array length max u32."),
+        },
+    };
+    try writer.writeByte(format.encode());
+    switch (format) {
+        .fixarray, .fixstr => {},
+        .bin_8, .str_8 => try writer.writeInt(u8, @intCast(len), .big),
+        .bin_16, .str_16, .array_16 => try writer.writeInt(u16, @intCast(len), .big),
+        .bin_32, .str_32, .array_32 => try writer.writeInt(u32, @intCast(len), .big),
+        else => unreachable,
+    }
+    return format;
 }
 
 test "round trip array" {
@@ -1212,26 +1235,62 @@ test "decode optional" {
 fn decodeVector(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) error{ Invalid, EndOfStream }!T {
     const format = Spec.Format.decode(try reader.readByte());
     const expected_format_len = @typeInfo(T).vector.len;
-    switch (format) {
-        .fixarray => |fix_array| {
-            if (fix_array.len != expected_format_len) {
-                return error.Invalid;
-            }
-        },
-        .array_16 => {
-            if (try reader.readInt(u16, .big) != expected_format_len)
-                return error.Invalid;
-        },
-        .array_32 => {
-            if (try reader.readInt(u32, .big) != expected_format_len)
-                return error.Invalid;
-        },
-        else => return error.Invalid,
-    }
-    var res: T = undefined;
     const Child = @typeInfo(T).vector.child;
-    for (0..expected_format_len) |i| {
-        res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+    if (Child == u8) {
+        switch (format_options) {
+            .bin => switch (format) {
+                .bin_8, .bin_16, .bin_32 => {},
+                else => return error.Invalid,
+            },
+            .str => switch (format) {
+                .fixstr, .str_8, .str_16, .str_32 => {},
+                else => return error.Invalid,
+            },
+            .array => switch (format) {
+                .fixarray, .array_16, .array_32 => {},
+                else => return error.Invalid,
+            },
+        }
+    } else {
+        switch (format) {
+            .fixarray, .array_16, .array_32 => {},
+            else => return error.Invalid,
+        }
+    }
+    const len = switch (format) {
+        .fixarray => |fmt| fmt.len,
+        .array_16 => try reader.readInt(u16, .big),
+        .array_32 => try reader.readInt(u32, .big),
+        .fixstr => |fmt| fmt.len,
+        .bin_8, .str_8 => try reader.readInt(u8, .big),
+        .bin_16, .str_16 => try reader.readInt(u16, .big),
+        .bin_32, .str_32 => try reader.readInt(u32, .big),
+        else => unreachable,
+    };
+    if (len != expected_format_len) return error.Invalid;
+    var res: T = undefined;
+    switch (Child) {
+        u8 => switch (format) {
+            .fixarray, .array_16, .array_32 => {
+                for (0..expected_format_len) |i| {
+                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+                }
+            },
+            .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
+                for (0..expected_format_len) |i| {
+                    res[i] = try reader.readByte();
+                }
+            },
+            else => unreachable,
+        },
+        else => switch (format) {
+            .fixarray, .array_16, .array_32 => {
+                for (0..expected_format_len) |i| {
+                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+                }
+            },
+            else => unreachable,
+        },
     }
     return res;
 }
@@ -1435,12 +1494,11 @@ pub fn FormatOptionsDefault(comptime T: type) FormatOptions(T) {
         .bool => void{},
         .int => void{},
         .float => void{},
-        .array => switch (@typeInfo(T).array.child) {
+        .array, .vector => switch (std.meta.Child(T)) {
             u8 => .bin,
-            else => FormatOptionsDefault(@typeInfo(T).array.child),
+            else => FormatOptionsDefault(std.meta.Child(T)),
         },
         .optional => FormatOptionsDefault(@typeInfo(T).optional.child),
-        .vector => FormatOptionsDefault(@typeInfo(T).vector.child),
         .@"struct", .@"union" => .{},
         .@"enum" => .int,
         .pointer => switch (@typeInfo(T).pointer.size) {
@@ -1460,16 +1518,15 @@ pub fn FormatOptions(comptime T: type) type {
         .bool => void,
         .int => void,
         .float => void,
-        .array => switch (@typeInfo(T).array.child) {
+        .array, .vector => switch (std.meta.Child(T)) {
             u8 => enum {
                 bin,
                 str,
                 array,
             },
-            else => FormatOptions(@typeInfo(T).array.child),
+            else => FormatOptions(std.meta.Child(T)),
         },
         .optional => FormatOptions(@typeInfo(T).optional.child),
-        .vector => FormatOptions(@typeInfo(T).vector.child),
         .@"struct" => struct {
             layout: enum { map, array } = .map,
             fields: FieldStructStrategy(T, FormatOptions, FormatOptionsDefault) = .{},

@@ -1210,7 +1210,7 @@ test "decode struct array" {
     try std.testing.expectError(error.Invalid, decode(Foo, bad_bytes, .{ .format = .{ .layout = .array } }));
 }
 
-fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) !T {
+fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) !T {
     const format = Spec.Format.decode(try reader.readByte());
 
     const Child = @typeInfo(T).optional.child;
@@ -1229,7 +1229,7 @@ test "decode optional" {
     try std.testing.expectEqual(@as(u8, 1), decode(?u8, &.{0x01}, .{}));
 }
 
-fn decodeVector(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) error{ Invalid, EndOfStream }!T {
+fn decodeVector(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) error{ Invalid, EndOfStream }!T {
     const format = Spec.Format.decode(try reader.readByte());
     const expected_format_len = @typeInfo(T).vector.len;
     const Child = @typeInfo(T).vector.child;
@@ -1296,7 +1296,7 @@ test "decode vector" {
     try std.testing.expectEqual(@Vector(3, bool){ true, false, true }, decode(@Vector(3, bool), &.{ 0b10010011, 0xc3, 0xc2, 0xc3 }, .{}));
 }
 
-fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: ?std.mem.Allocator, format_options: anytype) error{ Invalid, EndOfStream }!T {
+fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) error{ Invalid, EndOfStream }!T {
     const has_sentinel = @typeInfo(T).array.sentinel != null;
     const Child = @typeInfo(T).array.child;
     const format = Spec.Format.decode(try reader.readByte());

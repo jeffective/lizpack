@@ -1428,6 +1428,22 @@ test "decode int" {
     try std.testing.expectError(error.Invalid, decode(i5, &.{0xb3}, .{}));
 }
 
+test "fuzz ints" {
+    for (0..1000) |_| {
+        const expected: u64 = std.crypto.random.int(u64);
+        const encoded: []const u8 = encodeBounded(expected, .{}).slice();
+        try std.testing.expectEqual(expected, decode(@TypeOf(expected), encoded, .{}));
+    }
+}
+
+test "fuzz ints 2" {
+    for (0..1000) |_| {
+        const expected: i64 = std.crypto.random.int(i64);
+        const encoded: []const u8 = encodeBounded(expected, .{}).slice();
+        try std.testing.expectEqual(expected, decode(@TypeOf(expected), encoded, .{}));
+    }
+}
+
 fn decodeFloat(comptime T: type, reader: anytype) error{ Invalid, EndOfStream }!T {
     const format = Spec.Format.decode(try reader.readByte());
     return switch (@typeInfo(T).float.bits) {

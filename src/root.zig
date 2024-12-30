@@ -1375,19 +1375,17 @@ test "decode int" {
 
 fn decodeFloat(comptime T: type, reader: anytype) error{ Invalid, EndOfStream }!T {
     const format = Spec.Format.decode(try reader.readByte());
-    if (@typeInfo(T).float.bits == 32) {
-        switch (format) {
-            .float_32 => return @bitCast(try reader.readInt(u32, .big)),
-            else => return error.Invalid,
-        }
-    } else if (@typeInfo(T).float.bits == 64) {
-        switch (format) {
-            .float_64 => return @bitCast(try reader.readInt(u64, .big)),
-            else => return error.Invalid,
-        }
-    } else @compileError("Unsupported float type: " ++ @typeName(T));
-
-    unreachable;
+    return switch (@typeInfo(T).float.bits) {
+        32 => switch (format) {
+            .float_32 => @bitCast(try reader.readInt(u32, .big)),
+            else => error.Invalid,
+        },
+        64 => switch (format) {
+            .float_64 => @bitCast(try reader.readInt(u64, .big)),
+            else => error.Invalid,
+        },
+        else => @compileError("Unsupported float type: " ++ @typeName(T)),
+    };
 }
 
 test "decode float" {

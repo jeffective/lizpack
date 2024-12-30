@@ -1073,7 +1073,7 @@ fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc:
 
             var got_field: [num_struct_fields]bool = @splat(false);
             var res: T = undefined;
-            // yes is this O(n2) ... i don't care.
+            // TODO: yes is this O(n2) ... i don't care.
             for (0..num_struct_fields) |_| {
                 var field_name_buffer: [largestFieldNameLength(T)]u8 = undefined;
                 const format_key = Spec.Format.decode(try reader.readByte());

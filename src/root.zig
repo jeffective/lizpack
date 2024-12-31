@@ -8,7 +8,8 @@ pub fn EncodeError(comptime T: type) type {
     if (containsSlice(T)) {
         return error{
             NoSpaceLeft,
-            // MessagePack only supports up to 32 bit lengths of arrays.
+            /// MessagePack only supports up to 32 bit lengths of arrays.
+            /// If usize is 32 bits or smaller, this is unreachable.
             SliceLenTooLarge,
         };
     } else {

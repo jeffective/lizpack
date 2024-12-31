@@ -1429,22 +1429,6 @@ test "decode int" {
     try std.testing.expectError(error.Invalid, decode(i5, &.{0xb3}, .{}));
 }
 
-test "fuzz ints" {
-    for (0..1000) |_| {
-        const expected: u64 = std.crypto.random.int(u64);
-        const encoded: []const u8 = encodeBounded(expected, .{}).slice();
-        try std.testing.expectEqual(expected, decode(@TypeOf(expected), encoded, .{}));
-    }
-}
-
-test "fuzz ints 2" {
-    for (0..1000) |_| {
-        const expected: i64 = std.crypto.random.int(i64);
-        const encoded: []const u8 = encodeBounded(expected, .{}).slice();
-        try std.testing.expectEqual(expected, decode(@TypeOf(expected), encoded, .{}));
-    }
-}
-
 fn decodeFloat(comptime T: type, reader: anytype) error{ Invalid, EndOfStream }!T {
     const format = Spec.Format.decode(try reader.readByte());
     return switch (@typeInfo(T).float.bits) {
@@ -1599,4 +1583,26 @@ test "encode options 2" {
 
 test {
     _ = std.testing.refAllDecls(@This());
+}
+
+test "all the integers" {
+    inline for (0..64) |bits| {
+        const signs = &.{ .signed, .unsigned };
+        inline for (signs) |sign| {
+            const int: type = @Type(.{ .int = .{ .bits = bits, .signedness = sign } });
+            if (bits < 22) {
+                for (0..std.math.maxInt(int) + 1) |value| {
+                    const expected: int = @intCast(value);
+                    const encoded: []const u8 = encodeBounded(expected, .{}).slice();
+                    try std.testing.expectEqual(expected, decode(@TypeOf(expected), encoded, .{}));
+                }
+            } else {
+                for (0..1000) |_| {
+                    const expected: int = std.crypto.random.int(int);
+                    const encoded: []const u8 = encodeBounded(expected, .{}).slice();
+                    try std.testing.expectEqual(expected, decode(@TypeOf(expected), encoded, .{}));
+                }
+            }
+        }
+    }
 }

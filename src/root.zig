@@ -612,18 +612,16 @@ test "round trip optional 2" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
-fn encodeArray(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
+fn encodeArrayBytes(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const has_sentinel = @typeInfo(@TypeOf(value)).array.sentinel != null;
     const encoded_len = @typeInfo(@TypeOf(value)).array.len + @as(comptime_int, @intFromBool(has_sentinel));
     const Child = @typeInfo(@TypeOf(value)).array.child;
+    comptime assert(Child == u8);
 
-    const format: Spec.Format = switch (Child) {
-        u8 => switch (format_options) {
-            .bin => try encodeBinStrArrayFormat(encoded_len, .bin, writer),
-            .str => try encodeBinStrArrayFormat(encoded_len, .str, writer),
-            .array => try encodeBinStrArrayFormat(encoded_len, .array, writer),
-        },
-        else => try encodeBinStrArrayFormat(encoded_len, .array, writer),
+    const format: Spec.Format = switch (format_options) {
+        .bin => try encodeBinStrArrayFormat(encoded_len, .bin, writer),
+        .str => try encodeBinStrArrayFormat(encoded_len, .str, writer),
+        .array => try encodeBinStrArrayFormat(encoded_len, .array, writer),
     };
     switch (format) {
         .fixstr,
@@ -633,35 +631,65 @@ fn encodeArray(value: anytype, writer: anytype, format_options: ArrayFormatOptio
         .bin_8,
         .bin_16,
         .bin_32,
-        => switch (Child) {
-            u8 => {
-                try writer.writeAll(value[0..]);
-                if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
-                    const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                    try writer.writeByte(sentinel_value);
-                }
-            },
-            else => unreachable,
+        => {
+            try writer.writeAll(value[0..]);
+            if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
+                const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+                try writer.writeByte(sentinel_value);
+            }
         },
         .fixarray, .array_16, .array_32 => {
             for (value) |value_child| {
-                if (Child == u8) {
-                    try encodeAny(value_child, writer, {});
-                } else {
-                    try encodeAny(value_child, writer, format_options);
-                }
+                try encodeAny(value_child, writer, {});
             }
             if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                if (Child == u8) {
-                    try encodeAny(sentinel_value, writer, {});
-                } else {
-                    try encodeAny(sentinel_value, writer, format_options);
-                }
+                try encodeAny(sentinel_value, writer, {});
             }
         },
         else => unreachable,
     }
+}
+
+fn encodeArrayArray(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
+    const has_sentinel = @typeInfo(@TypeOf(value)).array.sentinel != null;
+    const encoded_len = @typeInfo(@TypeOf(value)).array.len + @as(comptime_int, @intFromBool(has_sentinel));
+    const Child = @typeInfo(@TypeOf(value)).array.child;
+    comptime assert(Child != u8);
+
+    _ = try encodeBinStrArrayFormat(encoded_len, .array, writer);
+    for (value) |value_child| {
+        try encodeAny(value_child, writer, format_options);
+    }
+    if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
+        const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+        try encodeAny(sentinel_value, writer, format_options);
+    }
+}
+
+fn encodeArrayMap(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
+    _ = writer;
+    _ = format_options;
+    unreachable;
+}
+fn encodeArray(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
+    const T = @TypeOf(value);
+    const Child = std.meta.Child(T);
+    if (Child == u8) {
+        assert(@TypeOf(format_options) == BytesOptions);
+        return encodeArrayBytes(value, writer, format_options);
+        // TODO: can be key value pair
+    } else switch (comptime canBeKeyValuePair(Child)) {
+        true => {
+            comptime assert(@TypeOf(format_options) == MapFormatOptions(T));
+            switch (format_options.layout) {
+                .map, .array => return encodeArrayArray(value, writer, format_options),
+                .map_item_first_field_is_key, .map_item_second_field_is_key => return encodeArrayMap(value, writer, format_options),
+            }
+        },
+        false => return encodeArrayArray(value, writer, format_options),
+    }
+    unreachable;
 }
 
 fn encodeBinStrArrayFormat(len: comptime_int, family: enum { bin, str, array }, writer: anytype) !Spec.Format {

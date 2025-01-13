@@ -128,7 +128,24 @@ pub fn largestEncodedSize(comptime T: type, format_options: FormatOptions(T)) us
                     .array => 5 + 2 * len, // TODO: don't assume array_32
                 },
                 else => switch (comptime canBeKeyValuePair(std.meta.Child(T))) {
-                    true => 5 + len * largestEncodedSize(std.meta.Child(T), format_options.asChildStructFormatOptionsTruncate()), // TODO: this is an overestimate!
+                    true => switch (format_options.layout) {
+                        // TODO: make this more readable
+                        .map_item_first_field_is_key, .map_item_second_field_is_key => 5 + len * (largestEncodedSize(
+                            std.meta.fields(std.meta.Child(T))[0].type,
+                            @field(
+                                format_options.fields,
+                                std.meta.fieldNames(std.meta.Child(T))[0],
+                            ),
+                        ) +
+                            largestEncodedSize(
+                            std.meta.fields(std.meta.Child(T))[1].type,
+                            @field(
+                                format_options.fields,
+                                std.meta.fieldNames(std.meta.Child(T))[1],
+                            ),
+                        )),
+                        .array, .map => 5 + len * largestEncodedSize(std.meta.Child(T), format_options.asChildStructFormatOptions()),
+                    },
                     false => 5 + len * largestEncodedSize(std.meta.Child(T), format_options),
                 },
             };

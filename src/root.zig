@@ -1124,8 +1124,7 @@ test "largest field name length" {
     try std.testing.expectEqual(4, largestFieldNameLength(Foo));
 }
 
-// could be MapFormatOptions or StructFormatOptions
-fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: FormatOptions(T)) !T {
+fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: StructFormatOptions(T)) !T {
     switch (format_options.layout) {
         .map => {
             const format = Spec.Format.decode(try reader.readByte());

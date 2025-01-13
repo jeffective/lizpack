@@ -1410,14 +1410,127 @@ fn decodeArrayArray(comptime T: type, reader: anytype, seeker: anytype, maybe_al
     return res;
 }
 
+// TODO: better name!
+fn decodeArrayMap(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: MapFormatOptions(T)) error{ Invalid, EndOfStream }!T {
+    const has_sentinel = @typeInfo(T).array.sentinel != null;
+    comptime assert(has_sentinel == false); // sentinel doesn't make sense for messagepack maps;
+    const Child = @typeInfo(T).array.child;
+
+    comptime assert(Child != u8);
+    comptime assert(canBeKeyValuePair(Child) == true);
+
+    const format = Spec.Format.decode(try reader.readByte());
+    const expected_format_len = @typeInfo(T).array.len;
+    switch (format) {
+        .fixmap, .map_16, .map_32 => {},
+        else => return error.Invalid,
+    }
+    const len = switch (format) {
+        .fixmap => |fmt| fmt.n_elements,
+        .map_16 => try reader.readInt(u16, .big),
+        .map_32 => try reader.readInt(u32, .big),
+        else => unreachable,
+    };
+    if (len != expected_format_len) return error.Invalid;
+    var res: T = undefined;
+    for (0..len) |i| {
+        switch (format_options.layout) {
+            .map_item_first_field_is_key => {
+                const KeyType = std.meta.fields(Child)[0].type;
+                const key_format = @field(format_options.fields, std.meta.fieldNames(Child)[0]);
+                const ValueType = std.meta.fields(Child)[1].type;
+                const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
+                var child: Child = undefined;
+                comptime assert(std.meta.fields(Child).len == 2);
+                @field(child, std.meta.fieldNames(Child)[0]) = try decodeAny(KeyType, reader, seeker, maybe_alloc, key_format);
+                @field(child, std.meta.fieldNames(Child)[1]) = try decodeAny(ValueType, reader, seeker, maybe_alloc, value_format);
+                res[i] = child;
+            },
+            .map_item_second_field_is_key => {
+                const KeyType = std.meta.fields(Child)[1].type;
+                const key_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
+                const ValueType = std.meta.fields(Child)[0].type;
+                const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
+                var child: Child = undefined;
+                comptime assert(std.meta.fields(Child).len == 2);
+                @field(child, std.meta.fieldNames(Child)[1]) = try decodeAny(KeyType, reader, seeker, maybe_alloc, key_format);
+                @field(child, std.meta.fieldNames(Child)[0]) = try decodeAny(ValueType, reader, seeker, maybe_alloc, value_format);
+                res[i] = child;
+            },
+            .map, .array => unreachable, // should be handled by decodeArrayArray
+        }
+    }
+    return res;
+}
+
+// test "decode slice map" {
+//     const MapItem = struct {
+//         key: []const u8,
+//         value: []const u8,
+//     };
+
+//     const expected: []const MapItem = &.{.{ .key = "foo", .value = "bar" }};
+
+//     const raw: []const u8 = &.{
+//         (Spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
+//         (Spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
+//         'f',
+//         'o',
+//         'o',
+//         (Spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
+//         'b',
+//         'a',
+//         'r',
+//     };
+//     const decoded = try decodeAlloc(std.testing.allocator, @TypeOf(expected), raw, .{ .format = .{ .layout = .map_item_first_field_is_key } });
+//     defer decoded.deinit();
+//     try std.testing.expectEqual(expected, decoded.value);
+// }
+
+test "decode array map first field is key" {
+    const MapItem = struct {
+        key: u8,
+        value: u8,
+    };
+    const expected: [1]MapItem = .{.{ .key = 3, .value = 4 }};
+    const raw: []const u8 = &.{
+        (Spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
+        3,
+        4,
+    };
+    const decoded = try decode(@TypeOf(expected), raw, .{ .format = .{ .layout = .map_item_first_field_is_key } });
+    try std.testing.expectEqual(expected, decoded);
+}
+
+test "decode array map second field is key" {
+    const MapItem = struct {
+        value: u8,
+        key: u8,
+    };
+    const expected: [1]MapItem = .{.{ .key = 3, .value = 4 }};
+    const raw: []const u8 = &.{
+        (Spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
+        3,
+        4,
+    };
+    const decoded = try decode(@TypeOf(expected), raw, .{ .format = .{ .layout = .map_item_second_field_is_key } });
+    try std.testing.expectEqual(expected, decoded);
+}
+
 fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: ArrayFormatOptions(T)) error{ Invalid, EndOfStream }!T {
     const Child = @typeInfo(T).array.child;
     if (Child == u8) {
         assert(@TypeOf(format_options) == BytesOptions);
         return decodeBytes(T, reader, seeker, maybe_alloc, format_options);
         // TODO: can be key value pair
-    } else switch (canBeKeyValuePair(Child)) {
-        true => unreachable,
+    } else switch (comptime canBeKeyValuePair(Child)) {
+        true => {
+            comptime assert(@TypeOf(format_options) == MapFormatOptions(T));
+            switch (format_options.layout) {
+                .map, .array => return decodeArrayMap(T, reader, seeker, maybe_alloc, format_options),
+                .map_item_first_field_is_key, .map_item_second_field_is_key => return decodeArrayMap(T, reader, seeker, maybe_alloc, format_options),
+            }
+        },
         false => return decodeArrayArray(T, reader, seeker, maybe_alloc, format_options),
     }
     unreachable;
@@ -1591,6 +1704,8 @@ const EnumFormatOptions = enum {
 };
 
 fn MapFormatOptions(comptime T: type) type {
+    const Child = std.meta.Child(T);
+    comptime assert(canBeKeyValuePair(Child));
     const LayoutOptions = enum {
         // Encode / decode as a map. The first field in each struct is key, the second is value.
         map_item_first_field_is_key,
@@ -1603,7 +1718,7 @@ fn MapFormatOptions(comptime T: type) type {
     };
     return struct {
         layout: LayoutOptions = .map,
-        fields: FieldStructFormatOptions(T) = .{},
+        fields: FieldStructFormatOptions(Child) = .{},
     };
 }
 
@@ -1612,7 +1727,7 @@ fn ArrayFormatOptions(comptime T: type) type {
     return switch (Child) {
         u8 => BytesOptions,
         else => switch (canBeKeyValuePair(Child)) {
-            true => MapFormatOptions(Child),
+            true => MapFormatOptions(T),
             false => FormatOptions(Child),
         },
     };

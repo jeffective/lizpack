@@ -1317,32 +1317,26 @@ test "decode vector" {
     try std.testing.expectEqual(@Vector(3, bool){ true, false, true }, decode(@Vector(3, bool), &.{ 0b10010011, 0xc3, 0xc2, 0xc3 }, .{}));
 }
 
-fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: ArrayFormatOptions(T)) error{ Invalid, EndOfStream }!T {
+fn decodeBytes(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: BytesOptions) error{ Invalid, EndOfStream }!T {
     const has_sentinel = @typeInfo(T).array.sentinel != null;
     const Child = @typeInfo(T).array.child;
+    assert(Child == u8);
     const format = Spec.Format.decode(try reader.readByte());
     comptime var expected_format_len = @typeInfo(T).array.len;
     if (@typeInfo(T).array.sentinel) |_| expected_format_len += 1;
-    if (Child == u8) {
-        assert(@TypeOf(format_options) == BytesOptions);
-        switch (format_options) {
-            .bin => switch (format) {
-                .bin_8, .bin_16, .bin_32 => {},
-                else => return error.Invalid,
-            },
-            .str => switch (format) {
-                .fixstr, .str_8, .str_16, .str_32 => {},
-                else => return error.Invalid,
-            },
-            .array => switch (format) {
-                .fixarray, .array_16, .array_32 => {},
-                else => return error.Invalid,
-            },
-        }
-        // TODO: can be key value pair
-    } else switch (format) {
-        .fixarray, .array_16, .array_32 => {},
-        else => return error.Invalid,
+    switch (format_options) {
+        .bin => switch (format) {
+            .bin_8, .bin_16, .bin_32 => {},
+            else => return error.Invalid,
+        },
+        .str => switch (format) {
+            .fixstr, .str_8, .str_16, .str_32 => {},
+            else => return error.Invalid,
+        },
+        .array => switch (format) {
+            .fixarray, .array_16, .array_32 => {},
+            else => return error.Invalid,
+        },
     }
     const len = switch (format) {
         .fixarray => |fmt| fmt.len,
@@ -1358,39 +1352,74 @@ fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: 
     var res: T = undefined;
     const decode_len = len - @as(comptime_int, @intFromBool(has_sentinel));
 
-    switch (Child) {
-        u8 => switch (format) {
-            .fixarray, .array_16, .array_32 => {
-                for (0..decode_len) |i| {
-                    assert(Child == u8);
-                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, {});
-                }
-            },
-            .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
-                for (0..decode_len) |i| {
-                    res[i] = try reader.readByte();
-                }
-                if (@typeInfo(T).array.sentinel) |sentinel| {
-                    const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                    if (try reader.readByte() != sentinel_value) return error.Invalid;
-                }
-            },
-            else => unreachable,
+    switch (format) {
+        .fixarray, .array_16, .array_32 => {
+            for (0..decode_len) |i| {
+                assert(Child == u8);
+                res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, {});
+            }
         },
-        else => switch (format) {
-            .fixarray, .array_16, .array_32 => {
-                for (0..decode_len) |i| {
-                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
-                }
-                if (@typeInfo(T).array.sentinel) |sentinel| {
-                    const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                    if (try decodeAny(Child, reader, seeker, maybe_alloc, format_options) != sentinel_value) return error.Invalid;
-                }
-            },
-            else => unreachable,
+        .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
+            for (0..decode_len) |i| {
+                res[i] = try reader.readByte();
+            }
+            if (@typeInfo(T).array.sentinel) |sentinel| {
+                const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+                if (try reader.readByte() != sentinel_value) return error.Invalid;
+            }
         },
+        else => unreachable,
     }
     return res;
+}
+
+// TODO: figure out better name!
+fn decodeArrayArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: ArrayFormatOptions(T)) error{ Invalid, EndOfStream }!T {
+    const has_sentinel = @typeInfo(T).array.sentinel != null;
+    const Child = @typeInfo(T).array.child;
+    assert(Child != u8);
+    const format = Spec.Format.decode(try reader.readByte());
+    comptime var expected_format_len = @typeInfo(T).array.len;
+    if (@typeInfo(T).array.sentinel) |_| expected_format_len += 1;
+    switch (format) {
+        .fixarray, .array_16, .array_32 => {},
+        else => return error.Invalid,
+    }
+    const len = switch (format) {
+        .fixarray => |fmt| fmt.len,
+        .array_16 => try reader.readInt(u16, .big),
+        .array_32 => try reader.readInt(u32, .big),
+        else => unreachable,
+    };
+    if (len != expected_format_len) return error.Invalid;
+    var res: T = undefined;
+    const decode_len = len - @as(comptime_int, @intFromBool(has_sentinel));
+    switch (format) {
+        .fixarray, .array_16, .array_32 => {
+            for (0..decode_len) |i| {
+                res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+            }
+            if (@typeInfo(T).array.sentinel) |sentinel| {
+                const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+                if (try decodeAny(Child, reader, seeker, maybe_alloc, format_options) != sentinel_value) return error.Invalid;
+            }
+        },
+        else => unreachable,
+    }
+    return res;
+}
+
+fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: ArrayFormatOptions(T)) error{ Invalid, EndOfStream }!T {
+    const Child = @typeInfo(T).array.child;
+    if (Child == u8) {
+        assert(@TypeOf(format_options) == BytesOptions);
+        return decodeBytes(T, reader, seeker, maybe_alloc, format_options);
+        // TODO: can be key value pair
+    } else switch (canBeKeyValuePair(Child)) {
+        true => unreachable,
+        false => return decodeArrayArray(T, reader, seeker, maybe_alloc, format_options),
+    }
+    unreachable;
 }
 
 test "decode array" {

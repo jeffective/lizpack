@@ -774,7 +774,6 @@ fn decodeAny(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: an
         .float => return try decodeFloat(T, reader),
         .array, .vector => return try decodeArray(T, reader, seeker, maybe_alloc, format_options),
         .optional => return try decodeOptional(T, reader, seeker, maybe_alloc, format_options),
-        // .vector => return try decodeArray(T, reader, seeker, maybe_alloc, format_options),
         .@"struct" => return try decodeStruct(T, reader, seeker, maybe_alloc, format_options),
         .@"enum" => return try decodeEnum(T, reader, format_options),
         .@"union" => return try decodeUnion(T, reader, seeker, maybe_alloc, format_options),
@@ -805,30 +804,24 @@ test "decode pointer one" {
     try std.testing.expectEqual(true, decoded.value.*);
 }
 
-fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
-    const has_sentinel = @typeInfo(T).pointer.sentinel != null;
-    const Child = @typeInfo(T).pointer.child;
+fn decodeSliceBytes(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
+    const has_sentinel = comptime hasSentinel(T);
+    const Child = std.meta.Child(T);
+    assert(Child == u8);
     const format = Spec.Format.decode(try reader.readByte());
-    if (Child == u8) {
-        switch (format_options) {
-            .bin => switch (format) {
-                .bin_8, .bin_16, .bin_32 => {},
-                else => return error.Invalid,
-            },
-            .str => switch (format) {
-                .fixstr, .str_8, .str_16, .str_32 => {},
-                else => return error.Invalid,
-            },
-            .array => switch (format) {
-                .fixarray, .array_16, .array_32 => {},
-                else => return error.Invalid,
-            },
-        }
-    } else {
-        switch (format) {
+    switch (format_options) {
+        .bin => switch (format) {
+            .bin_8, .bin_16, .bin_32 => {},
+            else => return error.Invalid,
+        },
+        .str => switch (format) {
+            .fixstr, .str_8, .str_16, .str_32 => {},
+            else => return error.Invalid,
+        },
+        .array => switch (format) {
             .fixarray, .array_16, .array_32 => {},
             else => return error.Invalid,
-        }
+        },
     }
 
     const len = switch (format) {
@@ -853,39 +846,95 @@ fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: anytyp
 
     const decode_len = len - @as(comptime_int, @intFromBool(has_sentinel));
 
-    switch (Child) {
-        u8 => switch (format) {
-            .fixarray, .array_16, .array_32 => {
-                for (0..decode_len) |i| {
-                    assert(Child == u8);
-                    res[i] = try decodeAny(Child, reader, seeker, alloc, {});
-                }
-            },
-            .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
-                for (0..decode_len) |i| {
-                    res[i] = try reader.readByte();
-                }
-                if (@typeInfo(T).pointer.sentinel) |sentinel| {
-                    const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                    if (try reader.readByte() != sentinel_value) return error.Invalid;
-                }
-            },
-            else => unreachable,
+    switch (format) {
+        .fixarray, .array_16, .array_32 => {
+            for (0..decode_len) |i| {
+                assert(Child == u8);
+                res[i] = try decodeAny(Child, reader, seeker, alloc, {});
+            }
         },
-        else => switch (format) {
-            .fixarray, .array_16, .array_32 => {
-                for (0..decode_len) |i| {
-                    res[i] = try decodeAny(Child, reader, seeker, alloc, format_options);
-                }
-                if (@typeInfo(T).pointer.sentinel) |sentinel| {
-                    const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                    if (try decodeAny(Child, reader, seeker, alloc, format_options) != sentinel_value) return error.Invalid;
-                }
-            },
-            else => unreachable,
+        .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
+            for (0..decode_len) |i| {
+                res[i] = try reader.readByte();
+            }
+            if (@typeInfo(T).pointer.sentinel) |sentinel| {
+                const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+                if (try reader.readByte() != sentinel_value) return error.Invalid;
+            }
         },
+        else => unreachable,
     }
     return res;
+}
+
+// TODO: better name!
+fn decodeSliceArray(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
+    const has_sentinel = comptime hasSentinel(T);
+    const Child = std.meta.Child(T);
+    comptime assert(Child != u8);
+    const format = Spec.Format.decode(try reader.readByte());
+    switch (format) {
+        .fixarray, .array_16, .array_32 => {},
+        else => return error.Invalid,
+    }
+    const len = switch (format) {
+        .fixarray => |fmt| fmt.len,
+        .array_16 => try reader.readInt(u16, .big),
+        .array_32 => try reader.readInt(u32, .big),
+        else => unreachable,
+    };
+    if (has_sentinel and len == 0) return error.Invalid;
+    const res = switch (has_sentinel) {
+        true => blk: {
+            const sentinel_value: Child = @as(*const Child, @ptrCast(@typeInfo(T).pointer.sentinel.?)).*;
+            break :blk try alloc.allocSentinel(Child, len - @as(comptime_int, @intFromBool(has_sentinel)), sentinel_value);
+        },
+        false => try alloc.alloc(Child, len),
+    };
+    errdefer alloc.free(res);
+
+    const decode_len = len - @as(comptime_int, @intFromBool(has_sentinel));
+
+    switch (format) {
+        .fixarray, .array_16, .array_32 => {
+            for (0..decode_len) |i| {
+                res[i] = try decodeAny(Child, reader, seeker, alloc, format_options);
+            }
+            if (@typeInfo(T).pointer.sentinel) |sentinel| {
+                const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+                if (try decodeAny(Child, reader, seeker, alloc, format_options) != sentinel_value) return error.Invalid;
+            }
+        },
+        else => unreachable,
+    }
+    return res;
+}
+
+fn decodeSliceMap(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
+    _ = reader;
+    _ = seeker;
+    _ = alloc;
+    _ = format_options;
+    unreachable;
+}
+
+fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
+    const Child = std.meta.Child(T);
+    if (Child == u8) {
+        assert(@TypeOf(format_options) == BytesOptions);
+        return decodeSliceBytes(T, reader, seeker, alloc, format_options);
+        // TODO: can be key value pair
+    } else switch (comptime canBeKeyValuePair(Child)) {
+        true => {
+            comptime assert(@TypeOf(format_options) == MapFormatOptions(T));
+            switch (format_options.layout) {
+                .map, .array => return decodeSliceArray(T, reader, seeker, alloc, format_options),
+                .map_item_first_field_is_key, .map_item_second_field_is_key => return decodeSliceMap(T, reader, seeker, alloc, format_options),
+            }
+        },
+        false => return decodeSliceArray(T, reader, seeker, alloc, format_options),
+    }
+    unreachable;
 }
 
 test "decode slice bools" {
@@ -1075,7 +1124,8 @@ test "largest field name length" {
     try std.testing.expectEqual(4, largestFieldNameLength(Foo));
 }
 
-fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: StructFormatOptions(T)) !T {
+// could be MapFormatOptions or StructFormatOptions
+fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: FormatOptions(T)) !T {
     switch (format_options.layout) {
         .map => {
             const format = Spec.Format.decode(try reader.readByte());
@@ -1258,6 +1308,7 @@ fn hasSentinel(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .array => @typeInfo(T).array.sentinel != null,
         .vector => false,
+        .pointer => @typeInfo(T).pointer.sentinel != null,
         else => unreachable,
     };
 }
@@ -1350,7 +1401,11 @@ fn decodeArrayArray(comptime T: type, reader: anytype, seeker: anytype, maybe_al
     switch (format) {
         .fixarray, .array_16, .array_32 => {
             for (0..decode_len) |i| {
-                res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+                if (comptime canBeKeyValuePair(Child)) {
+                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options.asChildStructFormatOptions());
+                } else {
+                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+                }
             }
             if (comptime hasSentinel(T)) {
                 if (@typeInfo(T).array.sentinel) |sentinel| {
@@ -1481,7 +1536,7 @@ fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: 
         true => {
             comptime assert(@TypeOf(format_options) == MapFormatOptions(T));
             switch (format_options.layout) {
-                .map, .array => return decodeArrayMap(T, reader, seeker, maybe_alloc, format_options),
+                .map, .array => return decodeArrayArray(T, reader, seeker, maybe_alloc, format_options),
                 .map_item_first_field_is_key, .map_item_second_field_is_key => return decodeArrayMap(T, reader, seeker, maybe_alloc, format_options),
             }
         },
@@ -1673,6 +1728,21 @@ fn MapFormatOptions(comptime T: type) type {
     return struct {
         layout: LayoutOptions = .map,
         fields: FieldStructFormatOptions(Child) = .{},
+
+        pub fn asChildStructFormatOptions(self: @This()) StructFormatOptions(Child) {
+            return switch (self.layout) {
+                .array => StructFormatOptions(Child){
+                    .layout = .array,
+                    .fields = self.fields,
+                },
+                .map => StructFormatOptions(Child){
+                    .layout = .map,
+                    .fields = self.fields,
+                },
+                .map_item_first_field_is_key => unreachable,
+                .map_item_second_field_is_key => unreachable,
+            };
+        }
     };
 }
 

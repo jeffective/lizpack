@@ -249,6 +249,50 @@ fn encodePointer(value: anytype, writer: anytype, seeker: anytype, format_option
     }
 }
 
+fn encodeSliceBytes(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
+    const T = @TypeOf(value);
+    const encoded_len = expectedArrayFormatLength(T);
+    const Child = @typeInfo(@TypeOf(value)).pointer.child;
+    comptime assert(Child == u8);
+
+    const format: Spec.Format =
+        switch (format_options) {
+        .bin => switch (encoded_len) {
+            0...std.math.maxInt(u8) => .{ .bin_8 = {} },
+            std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .bin_16 = {} },
+            std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .bin_32 = {} },
+            else => return error.SliceLenTooLarge,
+        },
+        .str => switch (encoded_len) {
+            0...std.math.maxInt(u5) => .{ .fixstr = .{ .len = @intCast(encoded_len) } },
+            std.math.maxInt(u5) + 1...std.math.maxInt(u8) => .{ .str_8 = {} },
+            std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .str_16 = {} },
+            std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .str_32 = {} },
+            else => return error.SliceLenTooLarge,
+        },
+        .array => switch (encoded_len) {
+            0...std.math.maxInt(u4) => .{ .fixarray = .{ .len = @intCast(encoded_len) } },
+            std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
+            std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
+            else => return error.SliceLenTooLarge,
+        },
+    };
+
+    try writer.writeByte(format.encode());
+    switch (format) {
+        .fixstr => {},
+        .bin_8, .str_8 => try writer.writeInt(u8, @intCast(encoded_len), .big),
+        .bin_16, .str_16 => try writer.writeInt(u16, @intCast(encoded_len), .big),
+        .bin_32, .str_32 => try writer.writeInt(u32, @intCast(encoded_len), .big),
+        else => unreachable,
+    }
+    try writer.writeAll(value[0..]);
+    if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
+        const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+        try writer.writeByte(sentinel_value);
+    }
+}
+
 fn encodeSlice(value: anytype, writer: anytype, seeker: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const has_sentinel = @typeInfo(@TypeOf(value)).pointer.sentinel != null;
     const encoded_len = value.len + @as(comptime_int, @intFromBool(has_sentinel));

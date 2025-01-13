@@ -127,7 +127,10 @@ pub fn largestEncodedSize(comptime T: type, format_options: FormatOptions(T)) us
                     .bin, .str => 5 + len, // TODO: don't assume bin_32 and str_32
                     .array => 5 + 2 * len, // TODO: don't assume array_32
                 },
-                else => 5 + len * largestEncodedSize(std.meta.Child(T), format_options),
+                else => switch (comptime canBeKeyValuePair(std.meta.Child(T))) {
+                    true => 5 + len * largestEncodedSize(std.meta.Child(T), format_options.asChildStructFormatOptionsTruncate()), // TODO: this is an overestimate!
+                    false => 5 + len * largestEncodedSize(std.meta.Child(T), format_options),
+                },
             };
         },
         .optional => largestEncodedSize(@typeInfo(T).optional.child, format_options),
@@ -658,19 +661,62 @@ fn encodeArrayArray(value: anytype, writer: anytype, format_options: ArrayFormat
 
     _ = try encodeBinStrArrayFormat(encoded_len, .array, writer);
     for (value) |value_child| {
-        try encodeAny(value_child, writer, format_options);
+        if (comptime canBeKeyValuePair(Child)) {
+            try encodeAny(value_child, writer, format_options.asChildStructFormatOptions());
+        } else {
+            try encodeAny(value_child, writer, format_options);
+        }
     }
     if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
-        const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-        try encodeAny(sentinel_value, writer, format_options);
+        if (comptime canBeKeyValuePair(Child)) {
+            const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+            try encodeAny(sentinel_value, writer, format_options.asChildStructFormatOptions());
+        } else {
+            const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+            try encodeAny(sentinel_value, writer, format_options);
+        }
     }
 }
 
 fn encodeArrayMap(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
-    _ = writer;
-    _ = format_options;
-    unreachable;
+    const T = @TypeOf(value);
+    comptime assert(hasSentinel(T) == false); // doesnt make sense to have sentinels on maps
+    const Child = std.meta.Child(T);
+    comptime assert(canBeKeyValuePair(Child));
+    try encodeMapFormat(value.len, writer);
+    switch (format_options.layout) {
+        .map_item_first_field_is_key => {
+            for (value) |child| {
+                comptime assert(std.meta.fields(Child).len == 2);
+                const key_format = @field(format_options.fields, std.meta.fieldNames(Child)[0]);
+                const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
+                try encodeAny(@field(child, std.meta.fieldNames(Child)[0]), writer, key_format);
+                try encodeAny(@field(child, std.meta.fieldNames(Child)[1]), writer, value_format);
+            }
+        },
+        .map_item_second_field_is_key => {
+            for (value) |child| {
+                comptime assert(std.meta.fields(Child).len == 2);
+                const key_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
+                const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[0]);
+                try encodeAny(@field(child, std.meta.fieldNames(Child)[1]), writer, key_format);
+                try encodeAny(@field(child, std.meta.fieldNames(Child)[0]), writer, value_format);
+            }
+        },
+        else => unreachable, // should be encodeArrayArray
+    }
 }
+test "round try array map first field is key" {
+    const MapItem = struct {
+        key: u8,
+        value: u8,
+    };
+    const expected: [1]MapItem = .{.{ .key = 3, .value = 4 }};
+    var out: [64]u8 = undefined;
+    const slice = try encode(expected, &out, .{ .format = .{ .layout = .map_item_first_field_is_key } });
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{ .format = .{ .layout = .map_item_first_field_is_key } }));
+}
+
 fn encodeArray(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const T = @TypeOf(value);
     const Child = std.meta.Child(T);
@@ -1838,6 +1884,28 @@ fn MapFormatOptions(comptime T: type) type {
                 },
                 .map_item_first_field_is_key => unreachable,
                 .map_item_second_field_is_key => unreachable,
+            };
+        }
+
+        // TODO: get rid of this!
+        pub fn asChildStructFormatOptionsTruncate(self: @This()) StructFormatOptions(Child) {
+            return switch (self.layout) {
+                .array => StructFormatOptions(Child){
+                    .layout = .array,
+                    .fields = self.fields,
+                },
+                .map => StructFormatOptions(Child){
+                    .layout = .map,
+                    .fields = self.fields,
+                },
+                .map_item_first_field_is_key => StructFormatOptions(Child){
+                    .layout = .map,
+                    .fields = self.fields,
+                },
+                .map_item_second_field_is_key => StructFormatOptions(Child){
+                    .layout = .map,
+                    .fields = self.fields,
+                },
             };
         }
     };

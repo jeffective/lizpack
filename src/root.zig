@@ -26,7 +26,7 @@ pub fn EncodeOptions(comptime T: type) type {
 /// Encode the value to MessagePack bytes with format customizations.
 pub fn encode(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))![]u8 {
     var fbs = std.io.fixedBufferStream(out);
-    try encodeAny(value, fbs.writer(), fbs.seekableStream(), options.format);
+    try encodeAny(value, fbs.writer(), options.format);
     if (comptime !containsSlice(@TypeOf(value))) {
         assert(largestEncodedSize(@TypeOf(value), options.format) >= fbs.getWritten().len);
     }
@@ -39,7 +39,7 @@ pub fn encode(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value)))
 pub fn encodeBounded(value: anytype, comptime options: EncodeOptions(@TypeOf(value))) std.BoundedArray(u8, largestEncodedSize(@TypeOf(value), options.format)) {
     var res = std.BoundedArray(u8, largestEncodedSize(@TypeOf(value), options.format)){};
     var fbs = std.io.fixedBufferStream(res.buffer[0..]);
-    encodeAny(value, fbs.writer(), fbs.seekableStream(), options.format) catch unreachable;
+    encodeAny(value, fbs.writer(), options.format) catch unreachable;
     res.len = fbs.getWritten().len;
     return res;
 }
@@ -223,28 +223,28 @@ fn containsSlice(comptime T: type) bool {
     };
 }
 
-fn encodeAny(value: anytype, writer: anytype, seeker: anytype, format_options: FormatOptions(@TypeOf(value))) !void {
+fn encodeAny(value: anytype, writer: anytype, format_options: FormatOptions(@TypeOf(value))) !void {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .bool => return try encodeBool(value, writer),
         .int => return try encodeInt(value, writer),
         .float => return try encodeFloat(value, writer),
-        .array => return try encodeArray(value, writer, seeker, format_options),
-        .optional => return try encodeOptional(value, writer, seeker, format_options),
-        .vector => return try encodeVector(value, writer, seeker, format_options),
-        .@"struct" => return try encodeStruct(value, writer, seeker, format_options),
+        .array => return try encodeArray(value, writer, format_options),
+        .optional => return try encodeOptional(value, writer, format_options),
+        .vector => return try encodeVector(value, writer, format_options),
+        .@"struct" => return try encodeStruct(value, writer, format_options),
         .@"enum" => return try encodeEnum(value, writer, format_options),
-        .@"union" => return try encodeUnion(value, writer, seeker, format_options),
-        .pointer => return try encodePointer(value, writer, seeker, format_options),
+        .@"union" => return try encodeUnion(value, writer, format_options),
+        .pointer => return try encodePointer(value, writer, format_options),
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
     }
     unreachable;
 }
 
-fn encodePointer(value: anytype, writer: anytype, seeker: anytype, format_options: FormatOptions(@TypeOf(value))) !void {
+fn encodePointer(value: anytype, writer: anytype, format_options: FormatOptions(@TypeOf(value))) !void {
     switch (@typeInfo(@TypeOf(value)).pointer.size) {
-        .One => try encodeAny(value.*, writer, seeker, format_options),
-        .Slice => try encodeSlice(value, writer, seeker, format_options),
+        .One => try encodeAny(value.*, writer, format_options),
+        .Slice => try encodeSlice(value, writer, format_options),
         else => @compileError("unsupported type " ++ @typeName(@TypeOf(value))),
     }
 }
@@ -293,7 +293,7 @@ fn encodeSliceBytes(value: anytype, writer: anytype, format_options: ArrayFormat
     }
 }
 
-fn encodeSlice(value: anytype, writer: anytype, seeker: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
+fn encodeSlice(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const has_sentinel = @typeInfo(@TypeOf(value)).pointer.sentinel != null;
     const encoded_len = value.len + @as(comptime_int, @intFromBool(has_sentinel));
     const Child = @typeInfo(@TypeOf(value)).pointer.child;
@@ -357,17 +357,17 @@ fn encodeSlice(value: anytype, writer: anytype, seeker: anytype, format_options:
         .fixarray, .array_16, .array_32 => {
             for (value) |value_child| {
                 if (Child == u8) {
-                    try encodeAny(value_child, writer, seeker, {});
+                    try encodeAny(value_child, writer, {});
                 } else {
-                    try encodeAny(value_child, writer, seeker, format_options);
+                    try encodeAny(value_child, writer, format_options);
                 }
             }
             if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
                 if (Child == u8) {
-                    try encodeAny(sentinel_value, writer, seeker, {});
+                    try encodeAny(sentinel_value, writer, {});
                 } else {
-                    try encodeAny(sentinel_value, writer, seeker, format_options);
+                    try encodeAny(sentinel_value, writer, format_options);
                 }
             }
         },
@@ -384,7 +384,7 @@ test "round trip slice" {
     try std.testing.expectEqualSlices(bool, expected, decoded.value);
 }
 
-fn encodeUnion(value: anytype, writer: anytype, seeker: anytype, format_options: UnionFormatOptions(@TypeOf(value))) !void {
+fn encodeUnion(value: anytype, writer: anytype, format_options: UnionFormatOptions(@TypeOf(value))) !void {
     comptime assert(@typeInfo(@TypeOf(value)).@"union".tag_type != null); // unions require a tag type
     switch (value) {
         inline else => |payload, tag| {
@@ -396,7 +396,7 @@ fn encodeUnion(value: anytype, writer: anytype, seeker: anytype, format_options:
                 .active_field => {},
             }
             const field_format_options = @field(format_options.fields, @tagName(tag));
-            try encodeAny(payload, writer, seeker, field_format_options);
+            try encodeAny(payload, writer, field_format_options);
         },
     }
 }
@@ -458,7 +458,7 @@ test "encode enum as str" {
     try std.testing.expectEqualSlices(u8, &.{ 0b10100011, 'f', 'o', 'o' }, slice);
 }
 
-fn encodeStruct(value: anytype, writer: anytype, seeker: anytype, format_options: StructFormatOptions(@TypeOf(value))) !void {
+fn encodeStruct(value: anytype, writer: anytype, format_options: StructFormatOptions(@TypeOf(value))) !void {
     const num_struct_fields = @typeInfo(@TypeOf(value)).@"struct".fields.len;
 
     if (num_struct_fields == 0) return;
@@ -469,13 +469,13 @@ fn encodeStruct(value: anytype, writer: anytype, seeker: anytype, format_options
             try encodeMapFormat(num_struct_fields, writer);
             inline for (comptime std.meta.fieldNames(@TypeOf(value)), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, format_option_field_name| {
                 try encodeStr(field_name, writer);
-                try encodeAny(@field(value, field_name), writer, seeker, @field(format_options.fields, format_option_field_name));
+                try encodeAny(@field(value, field_name), writer, @field(format_options.fields, format_option_field_name));
             }
         },
         .array => {
             try encodeArrayFormat(num_struct_fields, writer);
             inline for (comptime std.meta.fieldNames(@TypeOf(value)), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, format_option_field_name| {
-                try encodeAny(@field(value, field_name), writer, seeker, @field(format_options.fields, format_option_field_name));
+                try encodeAny(@field(value, field_name), writer, @field(format_options.fields, format_option_field_name));
             }
         },
     }
@@ -550,7 +550,7 @@ fn encodeStr(comptime str: []const u8, writer: anytype) !void {
     try writer.writeAll(str);
 }
 
-fn encodeVector(value: anytype, writer: anytype, seeker: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
+fn encodeVector(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const encoded_len = @typeInfo(@TypeOf(value)).vector.len;
     const Child = @typeInfo(@TypeOf(value)).vector.child;
     const format: Spec.Format = switch (Child) {
@@ -580,7 +580,7 @@ fn encodeVector(value: anytype, writer: anytype, seeker: anytype, format_options
         .fixarray, .array_16, .array_32 => {
             for (0..encoded_len) |i| {
                 assert(std.meta.Child(@TypeOf(value)) == u8);
-                try encodeAny(value[i], writer, seeker, {});
+                try encodeAny(value[i], writer, {});
             }
         },
         else => unreachable,
@@ -594,9 +594,9 @@ test "round trip vector" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
-fn encodeOptional(value: anytype, writer: anytype, seeker: anytype, format_options: FormatOptions(@TypeOf(value))) !void {
+fn encodeOptional(value: anytype, writer: anytype, format_options: FormatOptions(@TypeOf(value))) !void {
     if (value) |non_null| {
-        try encodeAny(non_null, writer, seeker, format_options);
+        try encodeAny(non_null, writer, format_options);
     } else {
         const format_byte = Spec.Format{ .nil = {} };
         try writer.writeByte(format_byte.encode());
@@ -617,7 +617,7 @@ test "round trip optional 2" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
-fn encodeArray(value: anytype, writer: anytype, seeker: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
+fn encodeArray(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const has_sentinel = @typeInfo(@TypeOf(value)).array.sentinel != null;
     const encoded_len = @typeInfo(@TypeOf(value)).array.len + @as(comptime_int, @intFromBool(has_sentinel));
     const Child = @typeInfo(@TypeOf(value)).array.child;
@@ -651,17 +651,17 @@ fn encodeArray(value: anytype, writer: anytype, seeker: anytype, format_options:
         .fixarray, .array_16, .array_32 => {
             for (value) |value_child| {
                 if (Child == u8) {
-                    try encodeAny(value_child, writer, seeker, {});
+                    try encodeAny(value_child, writer, {});
                 } else {
-                    try encodeAny(value_child, writer, seeker, format_options);
+                    try encodeAny(value_child, writer, format_options);
                 }
             }
             if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
                 if (Child == u8) {
-                    try encodeAny(sentinel_value, writer, seeker, {});
+                    try encodeAny(sentinel_value, writer, {});
                 } else {
-                    try encodeAny(sentinel_value, writer, seeker, format_options);
+                    try encodeAny(sentinel_value, writer, format_options);
                 }
             }
         },

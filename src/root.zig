@@ -250,8 +250,8 @@ fn encodePointer(value: anytype, writer: anytype, format_options: FormatOptions(
 }
 
 fn encodeSliceBytes(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
-    const T = @TypeOf(value);
-    const encoded_len = expectedArrayFormatLength(T);
+    const has_sentinel = @typeInfo(@TypeOf(value)).pointer.sentinel != null;
+    const encoded_len = value.len + @as(comptime_int, @intFromBool(has_sentinel));
     const Child = @typeInfo(@TypeOf(value)).pointer.child;
     comptime assert(Child == u8);
 
@@ -280,57 +280,7 @@ fn encodeSliceBytes(value: anytype, writer: anytype, format_options: ArrayFormat
 
     try writer.writeByte(format.encode());
     switch (format) {
-        .fixstr => {},
-        .bin_8, .str_8 => try writer.writeInt(u8, @intCast(encoded_len), .big),
-        .bin_16, .str_16 => try writer.writeInt(u16, @intCast(encoded_len), .big),
-        .bin_32, .str_32 => try writer.writeInt(u32, @intCast(encoded_len), .big),
-        else => unreachable,
-    }
-    try writer.writeAll(value[0..]);
-    if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
-        const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-        try writer.writeByte(sentinel_value);
-    }
-}
-
-fn encodeSlice(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
-    const has_sentinel = @typeInfo(@TypeOf(value)).pointer.sentinel != null;
-    const encoded_len = value.len + @as(comptime_int, @intFromBool(has_sentinel));
-    const Child = @typeInfo(@TypeOf(value)).pointer.child;
-
-    const format: Spec.Format = switch (Child) {
-        u8 => switch (format_options) {
-            .bin => switch (encoded_len) {
-                0...std.math.maxInt(u8) => .{ .bin_8 = {} },
-                std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .bin_16 = {} },
-                std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .bin_32 = {} },
-                else => return error.SliceLenTooLarge,
-            },
-            .str => switch (encoded_len) {
-                0...std.math.maxInt(u5) => .{ .fixstr = .{ .len = @intCast(encoded_len) } },
-                std.math.maxInt(u5) + 1...std.math.maxInt(u8) => .{ .str_8 = {} },
-                std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .str_16 = {} },
-                std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .str_32 = {} },
-                else => return error.SliceLenTooLarge,
-            },
-            .array => switch (encoded_len) {
-                0...std.math.maxInt(u4) => .{ .fixarray = .{ .len = @intCast(encoded_len) } },
-                std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
-                std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
-                else => return error.SliceLenTooLarge,
-            },
-        },
-        else => switch (encoded_len) {
-            0...std.math.maxInt(u4) => .{ .fixarray = .{ .len = @intCast(encoded_len) } },
-            std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
-            std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
-            else => return error.SliceLenTooLarge,
-        },
-    };
-
-    try writer.writeByte(format.encode());
-    switch (format) {
-        .fixarray, .fixstr => {},
+        .fixstr, .fixarray => {},
         .bin_8, .str_8 => try writer.writeInt(u8, @intCast(encoded_len), .big),
         .bin_16, .str_16, .array_16 => try writer.writeInt(u16, @intCast(encoded_len), .big),
         .bin_32, .str_32, .array_32 => try writer.writeInt(u32, @intCast(encoded_len), .big),
@@ -344,35 +294,80 @@ fn encodeSlice(value: anytype, writer: anytype, format_options: ArrayFormatOptio
         .bin_8,
         .bin_16,
         .bin_32,
-        => switch (Child) {
-            u8 => {
-                try writer.writeAll(value[0..]);
-                if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
-                    const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                    try writer.writeByte(sentinel_value);
-                }
-            },
-            else => unreachable,
+        => {
+            try writer.writeAll(value[0..]);
+            if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
+                const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+                try writer.writeByte(sentinel_value);
+            }
         },
         .fixarray, .array_16, .array_32 => {
             for (value) |value_child| {
-                if (Child == u8) {
-                    try encodeAny(value_child, writer, {});
-                } else {
-                    try encodeAny(value_child, writer, format_options);
-                }
+                try encodeAny(value_child, writer, {});
             }
             if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                if (Child == u8) {
-                    try encodeAny(sentinel_value, writer, {});
-                } else {
-                    try encodeAny(sentinel_value, writer, format_options);
-                }
+                try encodeAny(sentinel_value, writer, {});
             }
         },
         else => unreachable,
     }
+}
+
+fn encodeSliceArray(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
+    const has_sentinel = @typeInfo(@TypeOf(value)).pointer.sentinel != null;
+    const encoded_len = value.len + @as(comptime_int, @intFromBool(has_sentinel));
+    const Child = @typeInfo(@TypeOf(value)).pointer.child;
+    comptime assert(Child != u8);
+
+    const format: Spec.Format = switch (encoded_len) {
+        0...std.math.maxInt(u4) => .{ .fixarray = .{ .len = @intCast(encoded_len) } },
+        std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
+        std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
+        else => return error.SliceLenTooLarge,
+    };
+
+    try writer.writeByte(format.encode());
+    switch (format) {
+        .fixarray => {},
+        .array_16 => try writer.writeInt(u16, @intCast(encoded_len), .big),
+        .array_32 => try writer.writeInt(u32, @intCast(encoded_len), .big),
+        else => unreachable,
+    }
+
+    for (value) |value_child| {
+        try encodeAny(value_child, writer, format_options);
+    }
+    if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
+        const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+        try encodeAny(sentinel_value, writer, format_options);
+    }
+}
+
+fn encodeSliceMap(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
+    _ = writer;
+    _ = format_options;
+    unreachable;
+}
+
+fn encodeSlice(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
+    const T = @TypeOf(value);
+    const Child = std.meta.Child(T);
+    if (Child == u8) {
+        assert(@TypeOf(format_options) == BytesOptions);
+        return encodeSliceBytes(value, writer, format_options);
+        // TODO: can be key value pair
+    } else switch (comptime canBeKeyValuePair(Child)) {
+        true => {
+            comptime assert(@TypeOf(format_options) == MapFormatOptions(T));
+            switch (format_options.layout) {
+                .map, .array => return encodeSliceArray(value, writer, format_options),
+                .map_item_first_field_is_key, .map_item_second_field_is_key => return encodeSliceMap(value, writer, format_options),
+            }
+        },
+        false => return encodeSliceArray(value, writer, format_options),
+    }
+    unreachable;
 }
 
 test "round trip slice" {
@@ -1481,23 +1476,18 @@ fn decodeArrayArray(comptime T: type, reader: anytype, seeker: anytype, maybe_al
     if (len != expected_format_len) return error.Invalid;
     var res: T = undefined;
     const decode_len = len - @as(comptime_int, @intFromBool(has_sentinel));
-    switch (format) {
-        .fixarray, .array_16, .array_32 => {
-            for (0..decode_len) |i| {
-                if (comptime canBeKeyValuePair(Child)) {
-                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options.asChildStructFormatOptions());
-                } else {
-                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
-                }
-            }
-            if (comptime hasSentinel(T)) {
-                if (@typeInfo(T).array.sentinel) |sentinel| {
-                    const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                    if (try decodeAny(Child, reader, seeker, maybe_alloc, format_options) != sentinel_value) return error.Invalid;
-                }
-            }
-        },
-        else => unreachable,
+    for (0..decode_len) |i| {
+        if (comptime canBeKeyValuePair(Child)) {
+            res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options.asChildStructFormatOptions());
+        } else {
+            res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+        }
+    }
+    if (comptime hasSentinel(T)) {
+        if (@typeInfo(T).array.sentinel) |sentinel| {
+            const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
+            if (try decodeAny(Child, reader, seeker, maybe_alloc, format_options) != sentinel_value) return error.Invalid;
+        }
     }
     return res;
 }

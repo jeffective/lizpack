@@ -222,7 +222,7 @@ fn containsSlice(comptime T: type) bool {
     };
 }
 
-fn encodeAny(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
+fn encodeAny(value: anytype, writer: anytype, seeker: anytype, format_options: FormatOptions(@TypeOf(value))) !void {
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .bool => return try encodeBool(value, writer),
@@ -240,7 +240,7 @@ fn encodeAny(value: anytype, writer: anytype, seeker: anytype, format_options: a
     unreachable;
 }
 
-fn encodePointer(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
+fn encodePointer(value: anytype, writer: anytype, seeker: anytype, format_options: FormatOptions(@TypeOf(value))) !void {
     switch (@typeInfo(@TypeOf(value)).pointer.size) {
         .One => try encodeAny(value.*, writer, seeker, format_options),
         .Slice => try encodeSlice(value, writer, seeker, format_options),
@@ -248,7 +248,7 @@ fn encodePointer(value: anytype, writer: anytype, seeker: anytype, format_option
     }
 }
 
-fn encodeSlice(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
+fn encodeSlice(value: anytype, writer: anytype, seeker: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const has_sentinel = @typeInfo(@TypeOf(value)).pointer.sentinel != null;
     const encoded_len = value.len + @as(comptime_int, @intFromBool(has_sentinel));
     const Child = @typeInfo(@TypeOf(value)).pointer.child;
@@ -311,11 +311,19 @@ fn encodeSlice(value: anytype, writer: anytype, seeker: anytype, format_options:
         },
         .fixarray, .array_16, .array_32 => {
             for (value) |value_child| {
-                try encodeAny(value_child, writer, seeker, format_options);
+                if (Child == u8) {
+                    try encodeAny(value_child, writer, seeker, {});
+                } else {
+                    try encodeAny(value_child, writer, seeker, format_options);
+                }
             }
             if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                try encodeAny(sentinel_value, writer, seeker, format_options);
+                if (Child == u8) {
+                    try encodeAny(sentinel_value, writer, seeker, {});
+                } else {
+                    try encodeAny(sentinel_value, writer, seeker, format_options);
+                }
             }
         },
         else => unreachable,
@@ -331,7 +339,7 @@ test "round trip slice" {
     try std.testing.expectEqualSlices(bool, expected, decoded.value);
 }
 
-fn encodeUnion(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
+fn encodeUnion(value: anytype, writer: anytype, seeker: anytype, format_options: UnionFormatOptions(@TypeOf(value))) !void {
     comptime assert(@typeInfo(@TypeOf(value)).@"union".tag_type != null); // unions require a tag type
     switch (value) {
         inline else => |payload, tag| {
@@ -342,7 +350,8 @@ fn encodeUnion(value: anytype, writer: anytype, seeker: anytype, format_options:
                 },
                 .active_field => {},
             }
-            try encodeAny(payload, writer, seeker, format_options);
+            const field_format_options = @field(format_options.fields, @tagName(tag));
+            try encodeAny(payload, writer, seeker, field_format_options);
         },
     }
 }
@@ -364,7 +373,7 @@ test "round trip union map" {
     );
 }
 
-fn encodeEnum(value: anytype, writer: anytype, format_options: anytype) !void {
+fn encodeEnum(value: anytype, writer: anytype, format_options: EnumFormatOptions) !void {
     switch (format_options) {
         .int => {
             const TagInt = @typeInfo(@TypeOf(value)).@"enum".tag_type;
@@ -404,7 +413,7 @@ test "encode enum as str" {
     try std.testing.expectEqualSlices(u8, &.{ 0b10100011, 'f', 'o', 'o' }, slice);
 }
 
-fn encodeStruct(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
+fn encodeStruct(value: anytype, writer: anytype, seeker: anytype, format_options: StructFormatOptions(@TypeOf(value))) !void {
     const num_struct_fields = @typeInfo(@TypeOf(value)).@"struct".fields.len;
 
     if (num_struct_fields == 0) return;
@@ -496,7 +505,7 @@ fn encodeStr(comptime str: []const u8, writer: anytype) !void {
     try writer.writeAll(str);
 }
 
-fn encodeVector(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
+fn encodeVector(value: anytype, writer: anytype, seeker: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const encoded_len = @typeInfo(@TypeOf(value)).vector.len;
     const Child = @typeInfo(@TypeOf(value)).vector.child;
     const format: Spec.Format = switch (Child) {
@@ -525,7 +534,8 @@ fn encodeVector(value: anytype, writer: anytype, seeker: anytype, format_options
         },
         .fixarray, .array_16, .array_32 => {
             for (0..encoded_len) |i| {
-                try encodeAny(value[i], writer, seeker, format_options);
+                assert(std.meta.Child(@TypeOf(value)) == u8);
+                try encodeAny(value[i], writer, seeker, {});
             }
         },
         else => unreachable,
@@ -539,7 +549,7 @@ test "round trip vector" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
-fn encodeOptional(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
+fn encodeOptional(value: anytype, writer: anytype, seeker: anytype, format_options: FormatOptions(@TypeOf(value))) !void {
     if (value) |non_null| {
         try encodeAny(non_null, writer, seeker, format_options);
     } else {
@@ -562,7 +572,7 @@ test "round trip optional 2" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
-fn encodeArray(value: anytype, writer: anytype, seeker: anytype, format_options: anytype) !void {
+fn encodeArray(value: anytype, writer: anytype, seeker: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const has_sentinel = @typeInfo(@TypeOf(value)).array.sentinel != null;
     const encoded_len = @typeInfo(@TypeOf(value)).array.len + @as(comptime_int, @intFromBool(has_sentinel));
     const Child = @typeInfo(@TypeOf(value)).array.child;
@@ -595,11 +605,19 @@ fn encodeArray(value: anytype, writer: anytype, seeker: anytype, format_options:
         },
         .fixarray, .array_16, .array_32 => {
             for (value) |value_child| {
-                try encodeAny(value_child, writer, seeker, format_options);
+                if (Child == u8) {
+                    try encodeAny(value_child, writer, seeker, {});
+                } else {
+                    try encodeAny(value_child, writer, seeker, format_options);
+                }
             }
             if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                try encodeAny(sentinel_value, writer, seeker, format_options);
+                if (Child == u8) {
+                    try encodeAny(sentinel_value, writer, seeker, {});
+                } else {
+                    try encodeAny(sentinel_value, writer, seeker, format_options);
+                }
             }
         },
         else => unreachable,
@@ -748,7 +766,7 @@ test "roundtrip bool" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
-fn decodeAny(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) !T {
+fn decodeAny(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: FormatOptions(T)) !T {
     switch (@typeInfo(T)) {
         .bool => return try decodeBool(reader),
         .int => return try decodeInt(T, reader),
@@ -766,7 +784,7 @@ fn decodeAny(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: an
     unreachable;
 }
 
-fn decodePointer(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: anytype) !T {
+fn decodePointer(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: FormatOptions(T)) !T {
     switch (@typeInfo(T).pointer.size) {
         .One => {
             const Child = @typeInfo(T).pointer.child;
@@ -786,7 +804,7 @@ test "decode pointer one" {
     try std.testing.expectEqual(true, decoded.value.*);
 }
 
-fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: anytype) !T {
+fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
     const has_sentinel = @typeInfo(T).pointer.sentinel != null;
     const Child = @typeInfo(T).pointer.child;
     const format = Spec.Format.decode(try reader.readByte());
@@ -838,7 +856,8 @@ fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: anytyp
         u8 => switch (format) {
             .fixarray, .array_16, .array_32 => {
                 for (0..decode_len) |i| {
-                    res[i] = try decodeAny(Child, reader, seeker, alloc, format_options);
+                    assert(Child == u8);
+                    res[i] = try decodeAny(Child, reader, seeker, alloc, {});
                 }
             },
             .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
@@ -913,7 +932,7 @@ test "decode slice sentinel" {
 
 // TODO: refactor this to make it less garbage when inline for loops can have continue.
 // https://github.com/ziglang/zig/issues/9524
-fn decodeUnion(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) !T {
+fn decodeUnion(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: UnionFormatOptions(T)) !T {
     comptime assert(@typeInfo(T).@"union".tag_type != null); // Unions require a tag type
     switch (format_options.layout) {
         .map => {
@@ -979,7 +998,7 @@ test "decode union" {
     try std.testing.expectError(error.Invalid, decode(MyUnion, &.{0xc4}, .{ .format = .{ .layout = .active_field } }));
 }
 
-fn decodeEnum(comptime T: type, reader: anytype, format_options: anytype) !T {
+fn decodeEnum(comptime T: type, reader: anytype, format_options: EnumFormatOptions) !T {
     switch (format_options) {
         .int => {
             const TagInt = @typeInfo(T).@"enum".tag_type;
@@ -1055,7 +1074,7 @@ test "largest field name length" {
     try std.testing.expectEqual(4, largestFieldNameLength(Foo));
 }
 
-fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) !T {
+fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: StructFormatOptions(T)) !T {
     switch (format_options.layout) {
         .map => {
             const format = Spec.Format.decode(try reader.readByte());
@@ -1211,7 +1230,7 @@ test "decode struct array" {
     try std.testing.expectError(error.Invalid, decode(Foo, bad_bytes, .{ .format = .{ .layout = .array } }));
 }
 
-fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) !T {
+fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: FormatOptions(std.meta.Child(T))) !T {
     const format = Spec.Format.decode(try reader.readByte());
 
     const Child = @typeInfo(T).optional.child;
@@ -1230,7 +1249,7 @@ test "decode optional" {
     try std.testing.expectEqual(@as(u8, 1), decode(?u8, &.{0x01}, .{}));
 }
 
-fn decodeVector(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) error{ Invalid, EndOfStream }!T {
+fn decodeVector(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: ArrayFormatOptions(T)) error{ Invalid, EndOfStream }!T {
     const format = Spec.Format.decode(try reader.readByte());
     const expected_format_len = @typeInfo(T).vector.len;
     const Child = @typeInfo(T).vector.child;
@@ -1271,7 +1290,8 @@ fn decodeVector(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc:
         u8 => switch (format) {
             .fixarray, .array_16, .array_32 => {
                 for (0..expected_format_len) |i| {
-                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+                    assert(Child == u8);
+                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, {});
                 }
             },
             .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
@@ -1297,13 +1317,14 @@ test "decode vector" {
     try std.testing.expectEqual(@Vector(3, bool){ true, false, true }, decode(@Vector(3, bool), &.{ 0b10010011, 0xc3, 0xc2, 0xc3 }, .{}));
 }
 
-fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: anytype) error{ Invalid, EndOfStream }!T {
+fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: ArrayFormatOptions(T)) error{ Invalid, EndOfStream }!T {
     const has_sentinel = @typeInfo(T).array.sentinel != null;
     const Child = @typeInfo(T).array.child;
     const format = Spec.Format.decode(try reader.readByte());
     comptime var expected_format_len = @typeInfo(T).array.len;
     if (@typeInfo(T).array.sentinel) |_| expected_format_len += 1;
     if (Child == u8) {
+        assert(@TypeOf(format_options) == BytesOptions);
         switch (format_options) {
             .bin => switch (format) {
                 .bin_8, .bin_16, .bin_32 => {},
@@ -1318,11 +1339,10 @@ fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: 
                 else => return error.Invalid,
             },
         }
-    } else {
-        switch (format) {
-            .fixarray, .array_16, .array_32 => {},
-            else => return error.Invalid,
-        }
+        // TODO: can be key value pair
+    } else switch (format) {
+        .fixarray, .array_16, .array_32 => {},
+        else => return error.Invalid,
     }
     const len = switch (format) {
         .fixarray => |fmt| fmt.len,
@@ -1342,7 +1362,8 @@ fn decodeArray(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: 
         u8 => switch (format) {
             .fixarray, .array_16, .array_32 => {
                 for (0..decode_len) |i| {
-                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+                    assert(Child == u8);
+                    res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, {});
                 }
             },
             .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
@@ -1494,7 +1515,10 @@ pub fn FormatOptionsDefault(comptime T: type) FormatOptions(T) {
         .float => void{},
         .array, .vector => switch (std.meta.Child(T)) {
             u8 => .str,
-            else => FormatOptionsDefault(std.meta.Child(T)),
+            else => switch (canBeKeyValuePair(std.meta.Child(T))) {
+                true => .{},
+                false => FormatOptionsDefault(std.meta.Child(T)),
+            },
         },
         .optional => FormatOptionsDefault(@typeInfo(T).optional.child),
         .@"struct", .@"union" => .{},
@@ -1503,7 +1527,10 @@ pub fn FormatOptionsDefault(comptime T: type) FormatOptions(T) {
             .One => FormatOptionsDefault(@typeInfo(T).pointer.child),
             .Slice => switch (@typeInfo(T).pointer.child) {
                 u8 => .str,
-                else => FormatOptionsDefault(@typeInfo(T).pointer.child),
+                else => switch (canBeKeyValuePair(std.meta.Child(T))) {
+                    true => .{},
+                    false => FormatOptionsDefault(std.meta.Child(T)),
+                },
             },
             else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
         },
@@ -1511,42 +1538,94 @@ pub fn FormatOptionsDefault(comptime T: type) FormatOptions(T) {
     };
 }
 
+fn canBeKeyValuePair(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .@"struct" => std.meta.fields(T).len == 2,
+        else => false,
+    };
+}
+
+const BytesOptions = enum {
+    /// Encode / decode as binary.
+    bin,
+    /// Encode / decode as string.
+    str,
+    /// Encode / decode as array of ints.
+    array,
+};
+const EnumFormatOptions = enum {
+    /// Encode / decode as integer.
+    int,
+    /// Encode / decode as string.
+    str,
+};
+
+fn MapFormatOptions(comptime T: type) type {
+    const LayoutOptions = enum {
+        // Encode / decode as a map. The first field in each struct is key, the second is value.
+        map_item_first_field_is_key,
+        // Encode / decode as a map. The second field in each struct is key, the first is value.
+        map_item_second_field_is_key,
+        // Encode / decode as array of maps. Each struct is map where key is string of field name.
+        map,
+        // Encode / decode as array of arrays. Each struct is an heterogenous array.
+        array,
+    };
+    return struct {
+        layout: LayoutOptions = .map,
+        fields: FieldStructStrategy(T, FormatOptions, FormatOptionsDefault) = .{},
+    };
+}
+
+fn ArrayFormatOptions(comptime T: type) type {
+    const Child = std.meta.Child(T);
+    return switch (Child) {
+        u8 => BytesOptions,
+        else => switch (canBeKeyValuePair(Child)) {
+            true => MapFormatOptions(Child),
+            false => FormatOptions(Child),
+        },
+    };
+}
+
+fn StructFormatOptions(comptime T: type) type {
+    const LayoutOptions = enum {
+        /// Encode / decode as map, where key is string of field name.
+        map,
+        /// Encode / decode as heterogenous array.
+        array,
+    };
+    return struct {
+        layout: LayoutOptions = .map,
+        fields: FieldStructStrategy(T, FormatOptions, FormatOptionsDefault) = .{},
+    };
+}
+
+fn UnionFormatOptions(comptime T: type) type {
+    const LayoutOptions = enum {
+        /// Encode / decode as map with one key value pair, where key is string of field name.
+        map,
+        /// Encode as the active field.
+        /// Decode as first successfully decoded field.
+        active_field,
+    };
+    return struct {
+        layout: LayoutOptions = .map,
+        fields: UnionFieldStructStrategy(T, FormatOptions, FormatOptionsDefault) = .{},
+    };
+}
+
 pub fn FormatOptions(comptime T: type) type {
     return switch (@typeInfo(T)) {
-        .bool => void,
-        .int => void,
-        .float => void,
-        .array, .vector => switch (std.meta.Child(T)) {
-            u8 => enum {
-                bin,
-                str,
-                array,
-            },
-            else => FormatOptions(std.meta.Child(T)),
-        },
+        .bool, .int, .float => void,
+        .array, .vector => ArrayFormatOptions(T),
         .optional => FormatOptions(@typeInfo(T).optional.child),
-        .@"struct" => struct {
-            layout: enum { map, array } = .map,
-            fields: FieldStructStrategy(T, FormatOptions, FormatOptionsDefault) = .{},
-        },
-        .@"union" => struct {
-            layout: enum { map, active_field } = .map,
-            fields: UnionFieldStructStrategy(T, FormatOptions, FormatOptionsDefault) = .{},
-        },
-        .@"enum" => enum {
-            int,
-            str,
-        },
+        .@"struct" => StructFormatOptions(T),
+        .@"union" => UnionFormatOptions(T),
+        .@"enum" => EnumFormatOptions,
         .pointer => switch (@typeInfo(T).pointer.size) {
             .One => FormatOptions(@typeInfo(T).pointer.child),
-            .Slice => switch (@typeInfo(T).pointer.child) {
-                u8 => enum {
-                    str,
-                    bin,
-                    array,
-                },
-                else => FormatOptions(@typeInfo(T).pointer.child),
-            },
+            .Slice => ArrayFormatOptions(T),
             else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
         },
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
@@ -1563,6 +1642,20 @@ test "encode options" {
         .format = .{
             .layout = .map,
             .fields = .{ .foo = void{}, .bar = .str },
+        },
+    }));
+}
+
+test "encode options map" {
+    const Foo = struct {
+        foo: u8,
+        bar: []struct { key: []const u8, value: []const u8 },
+    };
+    const encode_options: EncodeOptions(Foo) = .{};
+    try std.testing.expectEqual(encode_options, @as(EncodeOptions(Foo), .{
+        .format = .{
+            .layout = .map,
+            .fields = .{ .foo = void{}, .bar = .{ .layout = .map } },
         },
     }));
 }

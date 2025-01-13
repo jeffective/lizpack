@@ -34,24 +34,25 @@ const CustomerComplaint = struct {
 
 ## Default Formats
 
-| Zig Type         | MessagePack Type                    |
-| ---------------- | ----------------------------------- |
-| `bool`           | bool                                |
-| `null`           | nil                                 |
-| `u3`,`u45`, `i6` | integer                             |
-| `?T`             | nil or T                            |
-| `enum`           | integer                             |
-| `[N]T`           | N length array of T                 |
-| `[N:x]T`         | N+1 length array of T ending in x   |
-| `[N]u8`          | str                                 |
-| `@Vector(N, T)`  | N length array of T                 |
-| `struct`         | map, str: field value               |
-| `union (enum)`   | map (single key-value pair)         |
-| `[]T`            | N length array of T                 |
-| `[:x]T`          | N + 1 length array of T ending in x |
-| `[]u8`           | str                                 |
-| `[:x]u8`         | str ending in x                     |
-| `*T`             | T                                   |
+| Zig Type                           | MessagePack Type                    |
+| ---------------------------------- | ----------------------------------- |
+| `bool`                             | bool                                |
+| `null`                             | nil                                 |
+| `u3`,`u45`, `i6`                   | integer                             |
+| `?T`                               | nil or T                            |
+| `enum`                             | integer                             |
+| `[N]T`                             | N length array of T                 |
+| `[N:x]T`                           | N+1 length array of T ending in x   |
+| `[N]u8`                            | str                                 |
+| `@Vector(N, T)`                    | N length array of T                 |
+| `struct`                           | map, str: field value               |
+| `union (enum)`                     | map (single key-value pair)         |
+| `[]T`                              | N length array of T                 |
+| `[:x]T`                            | N + 1 length array of T ending in x |
+| `[]u8`                             | str                                 |
+| `[:x]u8`                           | str ending in x                     |
+| `*T`                               | T                                   |
+
 
 > `str` is the default MessagePack type for `[]u8` because it is the smallest for short slices.
 
@@ -68,12 +69,14 @@ Note: pointer types require allocation to decode.
 
 You can customize how types are formatted in message pack:
 
-| Zig Type                         | Available Encodings                       |
-| -------------------------------- | ----------------------------------------- |
-| `enum`                           | string, int                               |
-| `[]u8`,`[N]u8`, `@Vector(N, u8)` | string, int, array                        |
-| `struct`                         | map, array                                |
-| `union (enum)`                   | map (single key-value pair), active field |
+| Zig Type                            | Available Encodings                       |
+| ----------------------------------- | ----------------------------------------- |
+| `enum`                              | string, int                               |
+| `[]u8`,`[N]u8`, `@Vector(N, u8)`    | string, int, array                        |
+| `struct`                            | map, array                                |
+| `union (enum)`                      | map (single key-value pair), active field |
+| `[] struct {key: ..., value: ...}`  | map, array                                |
+| `[N] struct {key: ..., value: ...}` | map, array                                |
 
 See [examples](examples/examples.zig) for how to do it.
 

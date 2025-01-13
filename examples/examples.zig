@@ -203,3 +203,37 @@ test "union format customization" {
     };
     try std.testing.expectEqual(MyUnion{ .my_u8 = 3 }, try lizpack.decode(MyUnion, bytes_map, .{ .format = MyUnion.format_as_map }));
 }
+
+test "maps" {
+    const RoleItem = struct {
+        username: []const u8, // key
+        role: enum { admin, plebeian }, // value
+
+    };
+
+    const roles: []const RoleItem = &.{
+        .{ .username = "sarah", .role = .admin },
+        .{ .username = "bob", .role = .plebeian },
+    };
+
+    const format: lizpack.FormatOptions(@TypeOf(roles)) = .{ .layout = .map_item_first_field_is_key };
+
+    const expected_bytes: []const u8 = &.{
+        (lizpack.Spec.Format{ .fixmap = .{ .n_elements = 2 } }).encode(),
+        (lizpack.Spec.Format{ .fixstr = .{ .len = 5 } }).encode(),
+        's',
+        'a',
+        'r',
+        'a',
+        'h',
+        0,
+        (lizpack.Spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
+        'b',
+        'o',
+        'b',
+        1,
+    };
+    var out: [1000]u8 = undefined;
+    const encoded = try lizpack.encode(roles, &out, .{ .format = format });
+    try std.testing.expectEqualSlices(u8, expected_bytes, encoded);
+}

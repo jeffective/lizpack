@@ -339,19 +339,65 @@ fn encodeSliceArray(value: anytype, writer: anytype, format_options: ArrayFormat
     }
 
     for (value) |value_child| {
-        try encodeAny(value_child, writer, format_options);
+        if (comptime canBeKeyValuePair(Child)) {
+            try encodeAny(value_child, writer, format_options.asChildStructFormatOptions());
+        } else {
+            try encodeAny(value_child, writer, format_options);
+        }
     }
     if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
         const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-        try encodeAny(sentinel_value, writer, format_options);
+        if (comptime canBeKeyValuePair(Child)) {
+            try encodeAny(sentinel_value, writer, format_options.asChildStructFormatOptions());
+        } else {
+            try encodeAny(sentinel_value, writer, format_options);
+        }
     }
 }
 
 fn encodeSliceMap(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
-    _ = writer;
-    _ = format_options;
-    unreachable;
+    const T = @TypeOf(value);
+    comptime assert(hasSentinel(T) == false); // doesnt make sense to have sentinels on maps
+    const Child = std.meta.Child(T);
+    comptime assert(canBeKeyValuePair(Child));
+    try encodeMapFormatSlice(value.len, writer);
+    switch (format_options.layout) {
+        .map_item_first_field_is_key => {
+            for (value) |child| {
+                comptime assert(std.meta.fields(Child).len == 2);
+                const key_format = @field(format_options.fields, std.meta.fieldNames(Child)[0]);
+                const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
+                try encodeAny(@field(child, std.meta.fieldNames(Child)[0]), writer, key_format);
+                try encodeAny(@field(child, std.meta.fieldNames(Child)[1]), writer, value_format);
+            }
+        },
+        .map_item_second_field_is_key => {
+            for (value) |child| {
+                comptime assert(std.meta.fields(Child).len == 2);
+                const key_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
+                const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[0]);
+                try encodeAny(@field(child, std.meta.fieldNames(Child)[1]), writer, key_format);
+                try encodeAny(@field(child, std.meta.fieldNames(Child)[0]), writer, value_format);
+            }
+        },
+        else => unreachable, // should be encodeArrayArray
+    }
 }
+
+test "round trip slice map first field is key" {
+    const MapItem = struct {
+        key: u8,
+        value: u8,
+    };
+    const expected: []const MapItem = &.{.{ .key = 3, .value = 4 }};
+    var out: [64]u8 = undefined;
+    const slice = try encode(expected, &out, .{ .format = .{ .layout = .map_item_first_field_is_key } });
+    const decoded = try decodeAlloc(std.testing.allocator, @TypeOf(expected), slice, .{ .format = .{ .layout = .map_item_first_field_is_key } });
+    defer decoded.deinit();
+    try std.testing.expectEqualDeep(expected, decoded.value);
+}
+
+// TODO: test second field as key
 
 fn encodeSlice(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const T = @TypeOf(value);
@@ -506,6 +552,23 @@ fn encodeArrayFormat(comptime len: comptime_int, writer: anytype) !void {
         .fixarray => {},
         .array_16 => try writer.writeInt(u16, @intCast(len), .big),
         .array_32 => try writer.writeInt(u32, @intCast(len), .big),
+        else => unreachable,
+    }
+}
+
+fn encodeMapFormatSlice(len: usize, writer: anytype) !void {
+    const format: Spec.Format = switch (len) {
+        0 => unreachable,
+        1...std.math.maxInt(u4) => .{ .fixmap = .{ .n_elements = @intCast(len) } },
+        std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .map_16 = {} },
+        std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .map_32 = {} },
+        else => return error.SliceLenTooLarge,
+    };
+    try writer.writeByte(format.encode());
+    switch (format) {
+        .fixmap => {},
+        .map_16 => try writer.writeInt(u16, @intCast(len), .big),
+        .map_32 => try writer.writeInt(u32, @intCast(len), .big),
         else => unreachable,
     }
 }
@@ -706,7 +769,7 @@ fn encodeArrayMap(value: anytype, writer: anytype, format_options: ArrayFormatOp
         else => unreachable, // should be encodeArrayArray
     }
 }
-test "round try array map first field is key" {
+test "round trip array map first field is key" {
     const MapItem = struct {
         key: u8,
         value: u8,
@@ -716,6 +779,8 @@ test "round try array map first field is key" {
     const slice = try encode(expected, &out, .{ .format = .{ .layout = .map_item_first_field_is_key } });
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{ .format = .{ .layout = .map_item_first_field_is_key } }));
 }
+
+// TODO: test second field as key
 
 fn encodeArray(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const T = @TypeOf(value);

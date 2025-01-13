@@ -91,6 +91,7 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, comptime T: type, in: []const u
 /// Returns longest possible length of MessagePack encoding for type T.
 /// Raises compile error for unbounded types (slices).
 pub fn largestEncodedSize(comptime T: type, format_options: FormatOptions(T)) usize {
+    @setEvalBranchQuota(2000);
     return switch (@typeInfo(T)) {
         .bool => 1, // see Spec, bools are one byte
         .int => switch (@typeInfo(T).int.signedness) {
@@ -1499,15 +1500,15 @@ test "decode float" {
     try std.testing.expectEqual(@as(f64, 1.23), try decode(f64, &.{ 0xcb, 0x3f, 0xf3, 0xae, 0x14, 0x7a, 0xe1, 0x47, 0xae }, .{}));
 }
 
-fn FieldStructStrategy(comptime S: type, comptime DataStrategy: fn (comptime T: type) type, comptime field_default_strategy: ?fn (comptime T: type) type) type {
+fn FieldStructFormatOptions(comptime S: type) type {
     var new_struct_fields: [@typeInfo(S).@"struct".fields.len]std.builtin.Type.StructField = undefined;
     for (&new_struct_fields, @typeInfo(S).@"struct".fields) |*new_struct_field, old_struct_field| {
         new_struct_field.* = .{
             .name = old_struct_field.name ++ "",
-            .type = DataStrategy(old_struct_field.type),
-            .default_value = if (field_default_strategy) |d| @as(?*const anyopaque, @ptrCast(&d(old_struct_field.type))) else null,
+            .type = FormatOptions(old_struct_field.type),
+            .default_value = &FormatOptionsDefault(old_struct_field.type),
             .is_comptime = false,
-            .alignment = if (@sizeOf(DataStrategy(old_struct_field.type)) > 0) @alignOf(DataStrategy(old_struct_field.type)) else 0,
+            .alignment = if (@sizeOf(FormatOptions(old_struct_field.type)) > 0) @alignOf(FormatOptions(old_struct_field.type)) else 0,
         };
     }
     return @Type(.{ .@"struct" = .{
@@ -1518,15 +1519,15 @@ fn FieldStructStrategy(comptime S: type, comptime DataStrategy: fn (comptime T: 
     } });
 }
 
-fn UnionFieldStructStrategy(comptime U: type, comptime DataStrategy: fn (comptime T: type) type, comptime field_default_strategy: ?fn (comptime T: type) type) type {
+fn UnionFieldStructFormatOptions(comptime U: type) type {
     var new_struct_fields: [@typeInfo(U).@"union".fields.len]std.builtin.Type.StructField = undefined;
     for (&new_struct_fields, @typeInfo(U).@"union".fields) |*new_struct_field, old_union_field| {
         new_struct_field.* = .{
             .name = old_union_field.name ++ "",
-            .type = DataStrategy(old_union_field.type),
-            .default_value = if (field_default_strategy) |d| @as(?*const anyopaque, @ptrCast(&d(old_union_field.type))) else null,
+            .type = FormatOptions(old_union_field.type),
+            .default_value = @as(?*const anyopaque, @ptrCast(&FormatOptionsDefault(old_union_field.type))),
             .is_comptime = false,
-            .alignment = if (@sizeOf(DataStrategy(old_union_field.type)) > 0) @alignOf(DataStrategy(old_union_field.type)) else 0,
+            .alignment = if (@sizeOf(FormatOptions(old_union_field.type)) > 0) @alignOf(FormatOptions(old_union_field.type)) else 0,
         };
     }
     return @Type(.{ .@"struct" = .{
@@ -1602,7 +1603,7 @@ fn MapFormatOptions(comptime T: type) type {
     };
     return struct {
         layout: LayoutOptions = .map,
-        fields: FieldStructStrategy(T, FormatOptions, FormatOptionsDefault) = .{},
+        fields: FieldStructFormatOptions(T) = .{},
     };
 }
 
@@ -1626,7 +1627,7 @@ fn StructFormatOptions(comptime T: type) type {
     };
     return struct {
         layout: LayoutOptions = .map,
-        fields: FieldStructStrategy(T, FormatOptions, FormatOptionsDefault) = .{},
+        fields: FieldStructFormatOptions(T) = .{},
     };
 }
 
@@ -1640,7 +1641,7 @@ fn UnionFormatOptions(comptime T: type) type {
     };
     return struct {
         layout: LayoutOptions = .map,
-        fields: UnionFieldStructStrategy(T, FormatOptions, FormatOptionsDefault) = .{},
+        fields: UnionFieldStructFormatOptions(T) = .{},
     };
 }
 

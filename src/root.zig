@@ -356,7 +356,6 @@ fn encodeSlice(value: anytype, writer: anytype, format_options: ArrayFormatOptio
     if (Child == u8) {
         assert(@TypeOf(format_options) == BytesOptions);
         return encodeSliceBytes(value, writer, format_options);
-        // TODO: can be key value pair
     } else switch (comptime canBeKeyValuePair(Child)) {
         true => {
             comptime assert(@TypeOf(format_options) == MapFormatOptions(T));
@@ -678,7 +677,6 @@ fn encodeArray(value: anytype, writer: anytype, format_options: ArrayFormatOptio
     if (Child == u8) {
         assert(@TypeOf(format_options) == BytesOptions);
         return encodeArrayBytes(value, writer, format_options);
-        // TODO: can be key value pair
     } else switch (comptime canBeKeyValuePair(Child)) {
         true => {
             comptime assert(@TypeOf(format_options) == MapFormatOptions(T));

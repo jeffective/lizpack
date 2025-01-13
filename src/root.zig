@@ -898,7 +898,11 @@ fn decodeSliceArray(comptime T: type, reader: anytype, seeker: anytype, alloc: a
     switch (format) {
         .fixarray, .array_16, .array_32 => {
             for (0..decode_len) |i| {
-                res[i] = try decodeAny(Child, reader, seeker, alloc, format_options);
+                if (comptime canBeKeyValuePair(Child)) {
+                    res[i] = try decodeAny(Child, reader, seeker, alloc, format_options.asChildStructFormatOptions());
+                } else {
+                    res[i] = try decodeAny(Child, reader, seeker, alloc, format_options);
+                }
             }
             if (@typeInfo(T).pointer.sentinel) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
@@ -911,11 +915,47 @@ fn decodeSliceArray(comptime T: type, reader: anytype, seeker: anytype, alloc: a
 }
 
 fn decodeSliceMap(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
-    _ = reader;
-    _ = seeker;
-    _ = alloc;
-    _ = format_options;
-    unreachable;
+    comptime assert(hasSentinel(T) == false); // doesn't make sense to have sentinel on maps
+    const Child = std.meta.Child(T);
+    comptime assert(Child != u8);
+    const format = Spec.Format.decode(try reader.readByte());
+    switch (format) {
+        .fixmap, .map_16, .map_32 => {},
+        else => return error.Invalid,
+    }
+    const len = switch (format) {
+        .fixmap => |fmt| fmt.n_elements,
+        .map_16 => try reader.readInt(u16, .big),
+        .map_32 => try reader.readInt(u32, .big),
+        else => unreachable,
+    };
+    const res = try alloc.alloc(Child, len);
+    errdefer alloc.free(res);
+
+    for (0..len) |i| {
+        switch (format_options.layout) {
+            .map_item_first_field_is_key => {
+                const KeyType = std.meta.fields(Child)[0].type;
+                const key_format = @field(format_options.fields, std.meta.fieldNames(Child)[0]);
+                const ValueType = std.meta.fields(Child)[1].type;
+                const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
+                comptime assert(std.meta.fields(Child).len == 2);
+                @field(res[i], std.meta.fieldNames(Child)[0]) = try decodeAny(KeyType, reader, seeker, alloc, key_format);
+                @field(res[i], std.meta.fieldNames(Child)[1]) = try decodeAny(ValueType, reader, seeker, alloc, value_format);
+            },
+            .map_item_second_field_is_key => {
+                const KeyType = std.meta.fields(Child)[1].type;
+                const key_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
+                const ValueType = std.meta.fields(Child)[0].type;
+                const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
+                comptime assert(std.meta.fields(Child).len == 2);
+                @field(res[i], std.meta.fieldNames(Child)[1]) = try decodeAny(KeyType, reader, seeker, alloc, key_format);
+                @field(res[i], std.meta.fieldNames(Child)[0]) = try decodeAny(ValueType, reader, seeker, alloc, value_format);
+            },
+            .map, .array => unreachable, // should be handled by decodeArrayArray
+        }
+    }
+    return res;
 }
 
 fn decodeSlice(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
@@ -1459,11 +1499,9 @@ fn decodeArrayMap(comptime T: type, reader: anytype, seeker: anytype, maybe_allo
                 const key_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
                 const ValueType = std.meta.fields(Child)[0].type;
                 const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
-                var child: Child = undefined;
                 comptime assert(std.meta.fields(Child).len == 2);
-                @field(child, std.meta.fieldNames(Child)[1]) = try decodeAny(KeyType, reader, seeker, maybe_alloc, key_format);
-                @field(child, std.meta.fieldNames(Child)[0]) = try decodeAny(ValueType, reader, seeker, maybe_alloc, value_format);
-                res[i] = child;
+                @field(res[i], std.meta.fieldNames(Child)[1]) = try decodeAny(KeyType, reader, seeker, maybe_alloc, key_format);
+                @field(res[i], std.meta.fieldNames(Child)[0]) = try decodeAny(ValueType, reader, seeker, maybe_alloc, value_format);
             },
             .map, .array => unreachable, // should be handled by decodeArrayArray
         }
@@ -1471,29 +1509,29 @@ fn decodeArrayMap(comptime T: type, reader: anytype, seeker: anytype, maybe_allo
     return res;
 }
 
-// test "decode slice map" {
-//     const MapItem = struct {
-//         key: []const u8,
-//         value: []const u8,
-//     };
+test "decode slice map" {
+    const MapItem = struct {
+        key: []const u8,
+        value: []const u8,
+    };
 
-//     const expected: []const MapItem = &.{.{ .key = "foo", .value = "bar" }};
+    const expected: []const MapItem = &.{.{ .key = "foo", .value = "bar" }};
 
-//     const raw: []const u8 = &.{
-//         (Spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
-//         (Spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
-//         'f',
-//         'o',
-//         'o',
-//         (Spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
-//         'b',
-//         'a',
-//         'r',
-//     };
-//     const decoded = try decodeAlloc(std.testing.allocator, @TypeOf(expected), raw, .{ .format = .{ .layout = .map_item_first_field_is_key } });
-//     defer decoded.deinit();
-//     try std.testing.expectEqual(expected, decoded.value);
-// }
+    const raw: []const u8 = &.{
+        (Spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
+        (Spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
+        'f',
+        'o',
+        'o',
+        (Spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
+        'b',
+        'a',
+        'r',
+    };
+    const decoded = try decodeAlloc(std.testing.allocator, @TypeOf(expected), raw, .{ .format = .{ .layout = .map_item_first_field_is_key } });
+    defer decoded.deinit();
+    try std.testing.expectEqualDeep(expected, decoded.value);
+}
 
 test "decode array map first field is key" {
     const MapItem = struct {

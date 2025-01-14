@@ -91,7 +91,7 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, comptime T: type, in: []const u
 /// Returns longest possible length of MessagePack encoding for type T.
 /// Raises compile error for unbounded types (slices).
 pub fn largestEncodedSize(comptime T: type, format_options: FormatOptions(T)) usize {
-    @setEvalBranchQuota(2000);
+    @setEvalBranchQuota(2000); // TODO: calcuate eval branch quota?
     return switch (@typeInfo(T)) {
         .bool => 1, // see Spec, bools are one byte
         .int => switch (@typeInfo(T).int.signedness) {
@@ -977,7 +977,7 @@ fn decodeAny(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: an
     unreachable;
 }
 
-fn decodePointer(comptime T: type, reader: anytype, seeker: anytype, alloc: anytype, format_options: FormatOptions(T)) !T {
+fn decodePointer(comptime T: type, reader: anytype, seeker: anytype, alloc: std.mem.Allocator, format_options: FormatOptions(T)) !T {
     switch (@typeInfo(T).pointer.size) {
         .One => {
             const Child = @typeInfo(T).pointer.child;
@@ -1513,7 +1513,7 @@ test "decode struct array" {
     try std.testing.expectError(error.Invalid, decode(Foo, bad_bytes, .{ .format = .{ .layout = .array } }));
 }
 
-fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: FormatOptions(std.meta.Child(T))) !T {
+fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: FormatOptions(T)) !T {
     const format = Spec.Format.decode(try reader.readByte());
 
     const Child = @typeInfo(T).optional.child;
@@ -1529,7 +1529,9 @@ fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_allo
 
 test "decode optional" {
     try std.testing.expectEqual(null, decode(?u8, &.{0xc0}, .{}));
+    try std.testing.expectEqual(null, decode(?????u8, &.{0xc0}, .{}));
     try std.testing.expectEqual(@as(u8, 1), decode(?u8, &.{0x01}, .{}));
+    try std.testing.expectEqual(@Vector(3, bool){ true, false, true }, decode(?@Vector(3, bool), &.{ 0b10010011, 0xc3, 0xc2, 0xc3 }, .{}));
 }
 
 test "decode vector" {

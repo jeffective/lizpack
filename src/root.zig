@@ -797,7 +797,16 @@ test "round trip array map first field is key" {
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{ .format = .{ .layout = .map_item_first_field_is_key } }));
 }
 
-// TODO: test second field as key
+test "round trip array map second field is key" {
+    const MapItem = struct {
+        value: u8,
+        key: u8,
+    };
+    const expected: [1]MapItem = .{.{ .key = 3, .value = 4 }};
+    var out: [64]u8 = undefined;
+    const slice = try encode(expected, &out, .{ .format = .{ .layout = .map_item_second_field_is_key } });
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{ .format = .{ .layout = .map_item_second_field_is_key } }));
+}
 
 fn encodeArray(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const T = @TypeOf(value);

@@ -134,5 +134,5 @@ const lizpack = @import("lizpack");
 
 ## TODO
 
-[ ] refactor: use of has_sentinel
-[ ] refactor: use of std.builtin.Type.Pointer.Sentinel
+- [ ] refactor: use of has_sentinel
+- [ ] refactor: use of std.builtin.Type.Pointer.Sentinel

@@ -235,8 +235,8 @@ fn containsSlice(comptime T: type) bool {
             if (containsSlice(field.type)) break :blk true;
         } else break :blk false,
         .pointer => switch (@typeInfo(T).pointer.size) {
-            .One => containsSlice(@typeInfo(T).pointer.child),
-            .Slice => true,
+            .one => containsSlice(@typeInfo(T).pointer.child),
+            .slice => true,
             else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
         },
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
@@ -263,14 +263,14 @@ fn encodeAny(value: anytype, writer: anytype, format_options: FormatOptions(@Typ
 
 fn encodePointer(value: anytype, writer: anytype, format_options: FormatOptions(@TypeOf(value))) !void {
     switch (@typeInfo(@TypeOf(value)).pointer.size) {
-        .One => try encodeAny(value.*, writer, format_options),
-        .Slice => try encodeSlice(value, writer, format_options),
+        .one => try encodeAny(value.*, writer, format_options),
+        .slice => try encodeSlice(value, writer, format_options),
         else => @compileError("unsupported type " ++ @typeName(@TypeOf(value))),
     }
 }
 
 fn encodeSliceBytes(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
-    const has_sentinel = @typeInfo(@TypeOf(value)).pointer.sentinel != null;
+    const has_sentinel = @typeInfo(@TypeOf(value)).pointer.sentinel_ptr != null;
     const encoded_len = value.len + @as(comptime_int, @intFromBool(has_sentinel));
     const Child = @typeInfo(@TypeOf(value)).pointer.child;
     comptime assert(Child == u8);
@@ -316,7 +316,7 @@ fn encodeSliceBytes(value: anytype, writer: anytype, format_options: ArrayFormat
         .bin_32,
         => {
             try writer.writeAll(value[0..]);
-            if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
+            if (@typeInfo(@TypeOf(value)).pointer.sentinel_ptr) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
                 try writer.writeByte(sentinel_value);
             }
@@ -325,7 +325,7 @@ fn encodeSliceBytes(value: anytype, writer: anytype, format_options: ArrayFormat
             for (value) |value_child| {
                 try encodeAny(value_child, writer, {});
             }
-            if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
+            if (@typeInfo(@TypeOf(value)).pointer.sentinel_ptr) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
                 try encodeAny(sentinel_value, writer, {});
             }
@@ -335,7 +335,7 @@ fn encodeSliceBytes(value: anytype, writer: anytype, format_options: ArrayFormat
 }
 
 fn encodeSliceArray(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
-    const has_sentinel = @typeInfo(@TypeOf(value)).pointer.sentinel != null;
+    const has_sentinel = @typeInfo(@TypeOf(value)).pointer.sentinel_ptr != null;
     const encoded_len = value.len + @as(comptime_int, @intFromBool(has_sentinel));
     const Child = @typeInfo(@TypeOf(value)).pointer.child;
     comptime assert(Child != u8);
@@ -362,7 +362,7 @@ fn encodeSliceArray(value: anytype, writer: anytype, format_options: ArrayFormat
             try encodeAny(value_child, writer, format_options);
         }
     }
-    if (@typeInfo(@TypeOf(value)).pointer.sentinel) |sentinel| {
+    if (@typeInfo(@TypeOf(value)).pointer.sentinel_ptr) |sentinel| {
         const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
         if (comptime canBeKeyValuePair(Child)) {
             try encodeAny(sentinel_value, writer, format_options.asChildStructFormatOptions());
@@ -695,7 +695,7 @@ test "round trip optional 2" {
 }
 
 fn encodeArrayBytes(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
-    const has_sentinel = @typeInfo(@TypeOf(value)).array.sentinel != null;
+    const has_sentinel = @typeInfo(@TypeOf(value)).array.sentinel_ptr != null;
     const encoded_len = @typeInfo(@TypeOf(value)).array.len + @as(comptime_int, @intFromBool(has_sentinel));
     const Child = @typeInfo(@TypeOf(value)).array.child;
     comptime assert(Child == u8);
@@ -715,7 +715,7 @@ fn encodeArrayBytes(value: anytype, writer: anytype, format_options: ArrayFormat
         .bin_32,
         => {
             try writer.writeAll(value[0..]);
-            if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
+            if (@typeInfo(@TypeOf(value)).array.sentinel_ptr) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
                 try writer.writeByte(sentinel_value);
             }
@@ -724,7 +724,7 @@ fn encodeArrayBytes(value: anytype, writer: anytype, format_options: ArrayFormat
             for (value) |value_child| {
                 try encodeAny(value_child, writer, {});
             }
-            if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
+            if (@typeInfo(@TypeOf(value)).array.sentinel_ptr) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
                 try encodeAny(sentinel_value, writer, {});
             }
@@ -734,7 +734,7 @@ fn encodeArrayBytes(value: anytype, writer: anytype, format_options: ArrayFormat
 }
 
 fn encodeArrayArray(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
-    const has_sentinel = @typeInfo(@TypeOf(value)).array.sentinel != null;
+    const has_sentinel = @typeInfo(@TypeOf(value)).array.sentinel_ptr != null;
     const encoded_len = @typeInfo(@TypeOf(value)).array.len + @as(comptime_int, @intFromBool(has_sentinel));
     const Child = @typeInfo(@TypeOf(value)).array.child;
     comptime assert(Child != u8);
@@ -747,7 +747,7 @@ fn encodeArrayArray(value: anytype, writer: anytype, format_options: ArrayFormat
             try encodeAny(value_child, writer, format_options);
         }
     }
-    if (@typeInfo(@TypeOf(value)).array.sentinel) |sentinel| {
+    if (@typeInfo(@TypeOf(value)).array.sentinel_ptr) |sentinel| {
         if (comptime canBeKeyValuePair(Child)) {
             const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
             try encodeAny(sentinel_value, writer, format_options.asChildStructFormatOptions());
@@ -988,14 +988,14 @@ fn decodeAny(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: an
 
 fn decodePointer(comptime T: type, reader: anytype, seeker: anytype, alloc: std.mem.Allocator, format_options: FormatOptions(T)) !T {
     switch (@typeInfo(T).pointer.size) {
-        .One => {
+        .one => {
             const Child = @typeInfo(T).pointer.child;
             const res = try alloc.create(Child);
             errdefer alloc.destroy(res);
             res.* = try decodeAny(Child, reader, seeker, alloc, format_options);
             return res;
         },
-        .Slice => return try decodeSlice(T, reader, seeker, alloc, format_options),
+        .slice => return try decodeSlice(T, reader, seeker, alloc, format_options),
         else => @compileError("unsupported type " ++ @typeName(T)),
     }
 }
@@ -1039,7 +1039,7 @@ fn decodeSliceBytes(comptime T: type, reader: anytype, seeker: anytype, alloc: a
     if (len == 0 and has_sentinel) return error.Invalid;
     const res = switch (has_sentinel) {
         true => blk: {
-            const sentinel_value: Child = @as(*const Child, @ptrCast(@typeInfo(T).pointer.sentinel.?)).*;
+            const sentinel_value: Child = @as(*const Child, @ptrCast(@typeInfo(T).pointer.sentinel_ptr.?)).*;
             break :blk try alloc.allocSentinel(Child, len - @as(comptime_int, @intFromBool(has_sentinel)), sentinel_value);
         },
         false => try alloc.alloc(Child, len),
@@ -1059,7 +1059,7 @@ fn decodeSliceBytes(comptime T: type, reader: anytype, seeker: anytype, alloc: a
             for (0..decode_len) |i| {
                 res[i] = try reader.readByte();
             }
-            if (@typeInfo(T).pointer.sentinel) |sentinel| {
+            if (@typeInfo(T).pointer.sentinel_ptr) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
                 if (try reader.readByte() != sentinel_value) return error.Invalid;
             }
@@ -1088,7 +1088,7 @@ fn decodeSliceArray(comptime T: type, reader: anytype, seeker: anytype, alloc: a
     if (has_sentinel and len == 0) return error.Invalid;
     const res = switch (has_sentinel) {
         true => blk: {
-            const sentinel_value: Child = @as(*const Child, @ptrCast(@typeInfo(T).pointer.sentinel.?)).*;
+            const sentinel_value: Child = @as(*const Child, @ptrCast(@typeInfo(T).pointer.sentinel_ptr.?)).*;
             break :blk try alloc.allocSentinel(Child, len - @as(comptime_int, @intFromBool(has_sentinel)), sentinel_value);
         },
         false => try alloc.alloc(Child, len),
@@ -1106,7 +1106,7 @@ fn decodeSliceArray(comptime T: type, reader: anytype, seeker: anytype, alloc: a
                     res[i] = try decodeAny(Child, reader, seeker, alloc, format_options);
                 }
             }
-            if (@typeInfo(T).pointer.sentinel) |sentinel| {
+            if (@typeInfo(T).pointer.sentinel_ptr) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
                 if (try decodeAny(Child, reader, seeker, alloc, format_options) != sentinel_value) return error.Invalid;
             }
@@ -1549,9 +1549,9 @@ test "decode vector" {
 
 fn hasSentinel(comptime T: type) bool {
     return switch (@typeInfo(T)) {
-        .array => @typeInfo(T).array.sentinel != null,
+        .array => @typeInfo(T).array.sentinel_ptr != null,
         .vector => false,
-        .pointer => @typeInfo(T).pointer.sentinel != null,
+        .pointer => @typeInfo(T).pointer.sentinel_ptr != null,
         else => unreachable,
     };
 }
@@ -1610,7 +1610,7 @@ fn decodeBytes(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: 
                 res[i] = try reader.readByte();
             }
             if (comptime hasSentinel(T)) {
-                if (@typeInfo(T).array.sentinel) |sentinel| {
+                if (@typeInfo(T).array.sentinel_ptr) |sentinel| {
                     const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
                     if (try reader.readByte() != sentinel_value) return error.Invalid;
                 }
@@ -1649,7 +1649,7 @@ fn decodeArrayArray(comptime T: type, reader: anytype, seeker: anytype, maybe_al
         }
     }
     if (comptime hasSentinel(T)) {
-        if (@typeInfo(T).array.sentinel) |sentinel| {
+        if (@typeInfo(T).array.sentinel_ptr) |sentinel| {
             const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
             if (try decodeAny(Child, reader, seeker, maybe_alloc, format_options) != sentinel_value) return error.Invalid;
         }
@@ -1659,7 +1659,7 @@ fn decodeArrayArray(comptime T: type, reader: anytype, seeker: anytype, maybe_al
 
 // TODO: better name!
 fn decodeArrayMap(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: MapFormatOptions(T)) error{ Invalid, EndOfStream }!T {
-    const has_sentinel = @typeInfo(T).array.sentinel != null;
+    const has_sentinel = @typeInfo(T).array.sentinel_ptr != null;
     comptime assert(has_sentinel == false); // sentinel doesn't make sense for messagepack maps;
     const Child = @typeInfo(T).array.child;
 
@@ -1864,7 +1864,7 @@ fn FieldStructFormatOptions(comptime S: type) type {
         new_struct_field.* = .{
             .name = old_struct_field.name ++ "",
             .type = FormatOptions(old_struct_field.type),
-            .default_value = &FormatOptionsDefault(old_struct_field.type),
+            .default_value_ptr = &FormatOptionsDefault(old_struct_field.type),
             .is_comptime = false,
             .alignment = if (@sizeOf(FormatOptions(old_struct_field.type)) > 0) @alignOf(FormatOptions(old_struct_field.type)) else 0,
         };
@@ -1883,7 +1883,7 @@ fn UnionFieldStructFormatOptions(comptime U: type) type {
         new_struct_field.* = .{
             .name = old_union_field.name ++ "",
             .type = FormatOptions(old_union_field.type),
-            .default_value = @as(?*const anyopaque, @ptrCast(&FormatOptionsDefault(old_union_field.type))),
+            .default_value_ptr = @as(?*const anyopaque, @ptrCast(&FormatOptionsDefault(old_union_field.type))),
             .is_comptime = false,
             .alignment = if (@sizeOf(FormatOptions(old_union_field.type)) > 0) @alignOf(FormatOptions(old_union_field.type)) else 0,
         };
@@ -1912,8 +1912,8 @@ pub fn FormatOptionsDefault(comptime T: type) FormatOptions(T) {
         .@"struct", .@"union" => .{},
         .@"enum" => .int,
         .pointer => switch (@typeInfo(T).pointer.size) {
-            .One => FormatOptionsDefault(@typeInfo(T).pointer.child),
-            .Slice => switch (@typeInfo(T).pointer.child) {
+            .one => FormatOptionsDefault(@typeInfo(T).pointer.child),
+            .slice => switch (@typeInfo(T).pointer.child) {
                 u8 => .str,
                 else => switch (canBeKeyValuePair(std.meta.Child(T))) {
                     true => .{},
@@ -2051,8 +2051,8 @@ pub fn FormatOptions(comptime T: type) type {
         .@"union" => UnionFormatOptions(T),
         .@"enum" => EnumFormatOptions,
         .pointer => switch (@typeInfo(T).pointer.size) {
-            .One => FormatOptions(@typeInfo(T).pointer.child),
-            .Slice => ArrayFormatOptions(T),
+            .one => FormatOptions(@typeInfo(T).pointer.child),
+            .slice => ArrayFormatOptions(T),
             else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
         },
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),

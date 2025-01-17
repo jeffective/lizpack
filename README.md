@@ -131,3 +131,8 @@ And import the library to begin using it:
 ```zig
 const lizpack = @import("lizpack");
 ```
+
+## TODO
+
+[ ] refactor: use of has_sentinel
+[ ] refactor: use of std.builtin.Type.Pointer.Sentinel

@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 const cast = std.math.cast;
 
 pub const Spec = @import("Specification.zig");
+pub const unstructured = @import("unstructured.zig");
 
 pub fn EncodeError(comptime T: type) type {
     if (containsSlice(T)) {

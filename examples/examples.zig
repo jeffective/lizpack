@@ -237,3 +237,12 @@ test "maps" {
     const encoded = try lizpack.encode(roles, &out, .{ .format = format });
     try std.testing.expectEqualSlices(u8, expected_bytes, encoded);
 }
+
+test "encodeAlloc" {
+    const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
+    const slice = try lizpack.encodeAlloc(std.testing.allocator, expected, .{});
+    defer std.testing.allocator.free(slice);
+    // the point here is that we don't actually need to know the length of the encoded, we allocate as much as is needed
+    try std.testing.expectEqual(@as(usize, 12), slice.len);
+    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), slice, .{}));
+}

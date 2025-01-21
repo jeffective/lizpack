@@ -24,6 +24,7 @@ pub fn EncodeOptions(comptime T: type) type {
 }
 
 /// Encode the value to MessagePack bytes with format customizations.
+/// Writes to the `out` parameter.
 pub fn encode(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))![]u8 {
     var fbs = std.io.fixedBufferStream(out);
     try encodeAny(value, fbs.writer(), options.format);
@@ -42,6 +43,33 @@ pub fn encodeBounded(value: anytype, comptime options: EncodeOptions(@TypeOf(val
     encodeAny(value, fbs.writer(), options.format) catch unreachable;
     res.len = fbs.getWritten().len;
     return res;
+}
+
+pub fn EncodeAllocError(comptime T: type) type {
+    if (containsSlice(T)) {
+        return error{
+            OutOfMemory,
+            /// MessagePack only supports up to 32 bit lengths of arrays.
+            /// If usize is 32 bits or smaller, this is unreachable.
+            SliceLenTooLarge,
+        };
+    } else {
+        return error{OutOfMemory};
+    }
+}
+
+/// Encode the value to MessagePack bytes. Allocates enough bytes as needed.
+/// Caller owns the returned slice of encoded bytes (caller is responsible for freeing the returned memory).
+pub fn encodeAlloc(allocator: std.mem.Allocator, value: anytype, options: EncodeOptions(@TypeOf(value))) EncodeAllocError(@TypeOf(value))![]u8 {
+    var bytes = std.ArrayList(u8).init(allocator);
+    defer bytes.deinit();
+    try encodeAny(value, bytes.writer(), options.format);
+    const slice = try bytes.toOwnedSlice();
+    errdefer unreachable;
+    if (comptime !containsSlice(@TypeOf(value))) {
+        assert(largestEncodedSize(@TypeOf(value), options.format) >= slice.len);
+    }
+    return slice;
 }
 
 pub fn DecodeOptions(comptime T: type) type {
@@ -207,6 +235,21 @@ pub fn largestEncodedSize(comptime T: type, format_options: FormatOptions(T)) us
         },
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
     };
+}
+
+test "encode alloc" {
+    const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
+    const slice = try encodeAlloc(std.testing.allocator, expected, .{});
+    defer std.testing.allocator.free(slice);
+    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
+}
+
+test "encodeAlloc failing allocator" {
+    const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
+    try std.testing.expectError(
+        error.OutOfMemory,
+        encodeAlloc(std.testing.failing_allocator, expected, .{}),
+    );
 }
 
 test "encode bounded" {

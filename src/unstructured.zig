@@ -3,12 +3,16 @@ const std = @import("std");
 const Spec = @import("Specification.zig");
 
 pub const MessagePackType = union(enum) {
-    integer: i65,
+    unsigned_integer: u64,
+    signed_integer: i64,
     nil: void,
     boolean: bool,
-    float: f64,
-    raw: []const u8,
-    array: []MessagePackType,
+    float_32: f32,
+    float_64: f64,
+    string: []const u8,
+    binary: []const u8,
+    array: []const MessagePackType,
+    map: []const MapItem,
 
     pub const MapItem = struct {
         key: MessagePackType,
@@ -57,23 +61,24 @@ fn decodeRecursive(reader: anytype, allocator: std.mem.Allocator) error{ OutOfMe
     _ = allocator;
     const format = Spec.Format.decode(try reader.readByte());
     switch (format) {
-        .positive_fixint => |fmt| return MessagePackType{ .integer = fmt.value },
-        .negative_fixint => |fmt| return MessagePackType{ .integer = fmt.value },
-        .uint_8 => return MessagePackType{ .integer = try reader.readInt(u8, .big) },
-        .uint_16 => return MessagePackType{ .integer = try reader.readInt(u16, .big) },
-        .uint_32 => return MessagePackType{ .integer = try reader.readInt(u32, .big) },
-        .uint_64 => return MessagePackType{ .integer = try reader.readInt(u64, .big) },
-        .int_8 => return MessagePackType{ .integer = try reader.readInt(i8, .big) },
-        .int_16 => return MessagePackType{ .integer = try reader.readInt(i16, .big) },
-        .int_32 => return MessagePackType{ .integer = try reader.readInt(i32, .big) },
-        .int_64 => return MessagePackType{ .integer = try reader.readInt(i64, .big) },
+        .positive_fixint => |fmt| return MessagePackType{ .unsigned_integer = fmt.value },
+        .negative_fixint => |fmt| return MessagePackType{ .signed_integer = fmt.value },
+        .uint_8 => return MessagePackType{ .unsigned_integer = try reader.readInt(u8, .big) },
+        .uint_16 => return MessagePackType{ .unsigned_integer = try reader.readInt(u16, .big) },
+        .uint_32 => return MessagePackType{ .unsigned_integer = try reader.readInt(u32, .big) },
+        .uint_64 => return MessagePackType{ .unsigned_integer = try reader.readInt(u64, .big) },
+        .int_8 => return MessagePackType{ .signed_integer = try reader.readInt(i8, .big) },
+        .int_16 => return MessagePackType{ .signed_integer = try reader.readInt(i16, .big) },
+        .int_32 => return MessagePackType{ .signed_integer = try reader.readInt(i32, .big) },
+        .int_64 => return MessagePackType{ .signed_integer = try reader.readInt(i64, .big) },
         else => unreachable, // TODO
     }
 }
 
 fn encodeRecursive(value: MessagePackType, writer: anytype) !void {
     switch (value) {
-        .integer => try encodeInteger(value.integer, writer),
+        .unsigned_integer => try encodeInteger(value.unsigned_integer, writer),
+        .signed_integer => try encodeInteger(value.signed_integer, writer),
         else => unreachable, // TODO
     }
 }
@@ -121,7 +126,7 @@ test "all the integers" {
                     var buffer: [1000]u8 = undefined;
                     var fba = std.heap.FixedBufferAllocator.init(buffer[0..]);
                     const allocator = fba.allocator();
-                    const expected = MessagePackType{ .integer = @intCast(value) };
+                    const expected = if (sign == .signed) MessagePackType{ .signed_integer = @intCast(value) } else MessagePackType{ .unsigned_integer = @intCast(value) };
                     const encoded: []const u8 = try encodeAlloc(allocator, expected);
                     defer allocator.free(encoded);
                     const decoded = try decodeAlloc(allocator, encoded);
@@ -133,7 +138,8 @@ test "all the integers" {
                     var buffer: [1000]u8 = undefined;
                     var fba = std.heap.FixedBufferAllocator.init(buffer[0..]);
                     const allocator = fba.allocator();
-                    const expected = MessagePackType{ .integer = std.crypto.random.int(int) };
+                    const value = std.crypto.random.int(int);
+                    const expected = if (sign == .signed) MessagePackType{ .signed_integer = @intCast(value) } else MessagePackType{ .unsigned_integer = @intCast(value) };
                     const encoded: []const u8 = try encodeAlloc(allocator, expected);
                     defer allocator.free(encoded);
                     const decoded = try decodeAlloc(allocator, encoded);

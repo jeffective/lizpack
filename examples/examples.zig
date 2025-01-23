@@ -160,7 +160,7 @@ test "array and slice format customizations" {
 
     const format_as_bin: lizpack.FormatOptions(@TypeOf(my_string)) = .bin;
     const slice = try lizpack.encode(my_string, &out, .{ .format = format_as_bin });
-    try std.testing.expectEqualSlices(u8, &.{ (lizpack.Spec.Format{ .bin_8 = {} }).encode(), 3, 'f', 'o', 'o' }, slice);
+    try std.testing.expectEqualSlices(u8, &.{ (lizpack.spec.Format{ .bin_8 = {} }).encode(), 3, 'f', 'o', 'o' }, slice);
 
     const format_as_string: lizpack.FormatOptions(@TypeOf(my_string)) = .str;
     const slice2 = try lizpack.encode(my_string, &out, .{ .format = format_as_string });
@@ -169,12 +169,12 @@ test "array and slice format customizations" {
     const format_as_array: lizpack.FormatOptions(@TypeOf(my_string)) = .array;
     const slice3 = try lizpack.encode(my_string, &out, .{ .format = format_as_array });
     try std.testing.expectEqualSlices(u8, &.{
-        (lizpack.Spec.Format{ .fixarray = .{ .len = 3 } }).encode(),
-        (lizpack.Spec.Format{ .uint_8 = {} }).encode(),
+        (lizpack.spec.Format{ .fixarray = .{ .len = 3 } }).encode(),
+        (lizpack.spec.Format{ .uint_8 = {} }).encode(),
         'f',
-        (lizpack.Spec.Format{ .uint_8 = {} }).encode(),
+        (lizpack.spec.Format{ .uint_8 = {} }).encode(),
         'o',
-        (lizpack.Spec.Format{ .uint_8 = {} }).encode(),
+        (lizpack.spec.Format{ .uint_8 = {} }).encode(),
         'o',
     }, slice3);
 }
@@ -188,12 +188,12 @@ test "union format customization" {
         pub const format_as_active_field: lizpack.FormatOptions(@This()) = .{ .layout = .active_field };
     };
 
-    const bytes_active_field: []const u8 = &.{(lizpack.Spec.Format{ .false = {} }).encode()};
+    const bytes_active_field: []const u8 = &.{(lizpack.spec.Format{ .false = {} }).encode()};
     try std.testing.expectEqual(MyUnion{ .my_bool = false }, try lizpack.decode(MyUnion, bytes_active_field, .{ .format = MyUnion.format_as_active_field }));
 
     const bytes_map: []const u8 = &.{
-        (lizpack.Spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
-        (lizpack.Spec.Format{ .fixstr = .{ .len = 5 } }).encode(),
+        (lizpack.spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
+        (lizpack.spec.Format{ .fixstr = .{ .len = 5 } }).encode(),
         'm',
         'y',
         '_',
@@ -219,15 +219,15 @@ test "maps" {
     const format: lizpack.FormatOptions(@TypeOf(roles)) = .{ .layout = .map_item_first_field_is_key };
 
     const expected_bytes: []const u8 = &.{
-        (lizpack.Spec.Format{ .fixmap = .{ .n_elements = 2 } }).encode(),
-        (lizpack.Spec.Format{ .fixstr = .{ .len = 5 } }).encode(),
+        (lizpack.spec.Format{ .fixmap = .{ .n_elements = 2 } }).encode(),
+        (lizpack.spec.Format{ .fixstr = .{ .len = 5 } }).encode(),
         's',
         'a',
         'r',
         'a',
         'h',
         0,
-        (lizpack.Spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
+        (lizpack.spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
         'b',
         'o',
         'b',
@@ -245,4 +245,27 @@ test "encodeAlloc" {
     // the point here is that we don't actually need to know the length of the encoded, we allocate as much as is needed
     try std.testing.expectEqual(@as(usize, 12), slice.len);
     try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), slice, .{}));
+}
+
+test "manual encoding" {
+    const expected: []const u8 = &.{
+        (lizpack.spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
+        'f',
+        'o',
+        'o',
+    };
+    const actual: lizpack.manual.MessagePackType = .{ .fixstr = "foo" };
+    const encoded = try lizpack.manual.encodeAlloc(std.testing.allocator, actual);
+    defer std.testing.allocator.free(encoded);
+    try std.testing.expectEqualSlices(u8, expected, encoded);
+}
+
+test "manual decoding" {
+    const raw: []const u8 = &.{@bitCast(@as(i8, -15))};
+    const decoded = try lizpack.manual.decodeAlloc(std.testing.allocator, raw);
+    defer decoded.deinit();
+    switch (decoded.value) {
+        .negative_fixint => |payload| try std.testing.expectEqual(-15, payload),
+        else => return error.Invalid,
+    }
 }

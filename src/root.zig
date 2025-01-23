@@ -2,8 +2,8 @@ const std = @import("std");
 const assert = std.debug.assert;
 const cast = std.math.cast;
 
-pub const Spec = @import("Specification.zig");
-pub const unstructured = @import("unstructured.zig");
+pub const manual = @import("manual.zig");
+pub const spec = @import("specification.zig");
 
 pub fn EncodeError(comptime T: type) type {
     if (containsSlice(T)) {
@@ -122,7 +122,7 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, comptime T: type, in: []const u
 pub fn largestEncodedSize(comptime T: type, format_options: FormatOptions(T)) usize {
     @setEvalBranchQuota(2000); // TODO: calcuate eval branch quota?
     return switch (@typeInfo(T)) {
-        .bool => 1, // see Spec, bools are one byte
+        .bool => 1, // see spec, bools are one byte
         .int => switch (@typeInfo(T).int.signedness) {
             .unsigned => switch (@typeInfo(T).int.bits) {
                 0...7 => 1, // pos fix int
@@ -319,7 +319,7 @@ fn encodeSliceBytes(value: anytype, writer: anytype, format_options: ArrayFormat
     const Child = @typeInfo(@TypeOf(value)).pointer.child;
     comptime assert(Child == u8);
 
-    const format: Spec.Format =
+    const format: spec.Format =
         switch (format_options) {
         .bin => switch (encoded_len) {
             0...std.math.maxInt(u8) => .{ .bin_8 = {} },
@@ -384,7 +384,7 @@ fn encodeSliceArray(value: anytype, writer: anytype, format_options: ArrayFormat
     const Child = @typeInfo(@TypeOf(value)).pointer.child;
     comptime assert(Child != u8);
 
-    const format: Spec.Format = switch (encoded_len) {
+    const format: spec.Format = switch (encoded_len) {
         0...std.math.maxInt(u4) => .{ .fixarray = .{ .len = @intCast(encoded_len) } },
         std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
         std.math.maxInt(u16) + 1...std.math.maxInt(u32) => .{ .array_32 = {} },
@@ -601,7 +601,7 @@ test "round trip struct array" {
 }
 
 fn encodeArrayFormat(comptime len: comptime_int, writer: anytype) !void {
-    const format: Spec.Format = switch (len) {
+    const format: spec.Format = switch (len) {
         0 => unreachable,
         1...std.math.maxInt(u4) => .{ .fixarray = .{ .len = @intCast(len) } },
         std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .array_16 = {} },
@@ -618,7 +618,7 @@ fn encodeArrayFormat(comptime len: comptime_int, writer: anytype) !void {
 }
 
 fn encodeMapFormatSlice(len: usize, writer: anytype) !void {
-    const format: Spec.Format = switch (len) {
+    const format: spec.Format = switch (len) {
         0 => unreachable,
         1...std.math.maxInt(u4) => .{ .fixmap = .{ .n_elements = @intCast(len) } },
         std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .map_16 = {} },
@@ -635,7 +635,7 @@ fn encodeMapFormatSlice(len: usize, writer: anytype) !void {
 }
 
 fn encodeMapFormat(comptime len: comptime_int, writer: anytype) !void {
-    const format: Spec.Format = switch (len) {
+    const format: spec.Format = switch (len) {
         0 => unreachable,
         1...std.math.maxInt(u4) => .{ .fixmap = .{ .n_elements = @intCast(len) } },
         std.math.maxInt(u4) + 1...std.math.maxInt(u16) => .{ .map_16 = {} },
@@ -653,7 +653,7 @@ fn encodeMapFormat(comptime len: comptime_int, writer: anytype) !void {
 
 fn encodeStr(comptime str: []const u8, writer: anytype) !void {
     comptime assert(str.len <= std.math.maxInt(u32));
-    const format: Spec.Format = switch (str.len) {
+    const format: spec.Format = switch (str.len) {
         0...std.math.maxInt(u5) => |len| .{ .fixstr = .{ .len = @intCast(len) } },
         std.math.maxInt(u5) + 1...std.math.maxInt(u8) => .{ .str_8 = {} },
         std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .str_16 = {} },
@@ -674,7 +674,7 @@ fn encodeStr(comptime str: []const u8, writer: anytype) !void {
 fn encodeVector(value: anytype, writer: anytype, format_options: ArrayFormatOptions(@TypeOf(value))) !void {
     const encoded_len = @typeInfo(@TypeOf(value)).vector.len;
     const Child = @typeInfo(@TypeOf(value)).vector.child;
-    const format: Spec.Format = switch (Child) {
+    const format: spec.Format = switch (Child) {
         u8 => switch (format_options) {
             .bin => try encodeBinStrArrayFormat(encoded_len, .bin, writer),
             .str => try encodeBinStrArrayFormat(encoded_len, .str, writer),
@@ -719,7 +719,7 @@ fn encodeOptional(value: anytype, writer: anytype, format_options: FormatOptions
     if (value) |non_null| {
         try encodeAny(non_null, writer, format_options);
     } else {
-        const format_byte = Spec.Format{ .nil = {} };
+        const format_byte = spec.Format{ .nil = {} };
         try writer.writeByte(format_byte.encode());
     }
 }
@@ -744,7 +744,7 @@ fn encodeArrayBytes(value: anytype, writer: anytype, format_options: ArrayFormat
     const Child = @typeInfo(@TypeOf(value)).array.child;
     comptime assert(Child == u8);
 
-    const format: Spec.Format = switch (format_options) {
+    const format: spec.Format = switch (format_options) {
         .bin => try encodeBinStrArrayFormat(encoded_len, .bin, writer),
         .str => try encodeBinStrArrayFormat(encoded_len, .str, writer),
         .array => try encodeBinStrArrayFormat(encoded_len, .array, writer),
@@ -871,8 +871,8 @@ fn encodeArray(value: anytype, writer: anytype, format_options: ArrayFormatOptio
     unreachable;
 }
 
-fn encodeBinStrArrayFormat(len: comptime_int, family: enum { bin, str, array }, writer: anytype) !Spec.Format {
-    const format: Spec.Format = switch (family) {
+fn encodeBinStrArrayFormat(len: comptime_int, family: enum { bin, str, array }, writer: anytype) !spec.Format {
+    const format: spec.Format = switch (family) {
         .bin => switch (len) {
             0...std.math.maxInt(u8) => .{ .bin_8 = {} },
             std.math.maxInt(u8) + 1...std.math.maxInt(u16) => .{ .bin_16 = {} },
@@ -912,7 +912,7 @@ test "round trip array" {
 }
 
 fn encodeFloat(value: anytype, writer: anytype) !void {
-    const format: Spec.Format = switch (@typeInfo(@TypeOf(value)).float.bits) {
+    const format: spec.Format = switch (@typeInfo(@TypeOf(value)).float.bits) {
         32 => .{ .float_32 = {} },
         64 => .{ .float_64 = {} },
         else => @compileError("MessagePack only supports 32 or 64 bit floats."),
@@ -945,7 +945,7 @@ fn encodeInt(value: anytype, writer: anytype) !void {
 
     if (@typeInfo(T).int.bits > 64) @compileError("MessagePack only supports up to 64 bit integers.");
 
-    const format: Spec.Format = switch (@typeInfo(T).int.signedness) {
+    const format: spec.Format = switch (@typeInfo(T).int.signedness) {
         .unsigned => switch (@typeInfo(T).int.bits) {
             0...7 => .{ .positive_fixint = .{ .value = value } },
             8 => .{ .uint_8 = {} },
@@ -995,8 +995,8 @@ test "encode int" {
 
 fn encodeBool(value: anytype, writer: anytype) !void {
     switch (value) {
-        true => try writer.writeByte((Spec.Format{ .true = {} }).encode()),
-        false => try writer.writeByte((Spec.Format{ .false = {} }).encode()),
+        true => try writer.writeByte((spec.Format{ .true = {} }).encode()),
+        false => try writer.writeByte((spec.Format{ .false = {} }).encode()),
     }
 }
 
@@ -1054,7 +1054,7 @@ fn decodeSliceBytes(comptime T: type, reader: anytype, seeker: anytype, alloc: a
     const has_sentinel = comptime hasSentinel(T);
     const Child = std.meta.Child(T);
     assert(Child == u8);
-    const format = Spec.Format.decode(try reader.readByte());
+    const format = spec.Format.decode(try reader.readByte());
     switch (format_options) {
         .bin => switch (format) {
             .bin_8, .bin_16, .bin_32 => {},
@@ -1118,7 +1118,7 @@ fn decodeSliceArray(comptime T: type, reader: anytype, seeker: anytype, alloc: a
     const has_sentinel = comptime hasSentinel(T);
     const Child = std.meta.Child(T);
     comptime assert(Child != u8);
-    const format = Spec.Format.decode(try reader.readByte());
+    const format = spec.Format.decode(try reader.readByte());
     switch (format) {
         .fixarray, .array_16, .array_32 => {},
         else => return error.Invalid,
@@ -1164,7 +1164,7 @@ fn decodeSliceMap(comptime T: type, reader: anytype, seeker: anytype, alloc: any
     comptime assert(hasSentinel(T) == false); // doesn't make sense to have sentinel on maps
     const Child = std.meta.Child(T);
     comptime assert(Child != u8);
-    const format = Spec.Format.decode(try reader.readByte());
+    const format = spec.Format.decode(try reader.readByte());
     switch (format) {
         .fixmap, .map_16, .map_32 => {},
         else => return error.Invalid,
@@ -1273,11 +1273,11 @@ fn decodeUnion(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: 
     switch (format_options.layout) {
         .map => {
             const format_byte = try reader.readByte();
-            if (format_byte != (Spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode()) {
+            if (format_byte != (spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode()) {
                 return error.Invalid;
             }
             var field_name_buffer: [largestFieldNameLength(T)]u8 = undefined;
-            const format_key = Spec.Format.decode(try reader.readByte());
+            const format_key = spec.Format.decode(try reader.readByte());
             const name_len = switch (format_key) {
                 .bin_8, .str_8 => try reader.readInt(u8, .big),
                 .bin_16, .str_16 => try reader.readInt(u16, .big),
@@ -1346,7 +1346,7 @@ fn decodeEnum(comptime T: type, reader: anytype, format_options: EnumFormatOptio
         },
         .str => {
             var field_name_buffer: [largestFieldNameLength(T)]u8 = undefined;
-            const format_key = Spec.Format.decode(try reader.readByte());
+            const format_key = spec.Format.decode(try reader.readByte());
             const name_len = switch (format_key) {
                 .bin_8, .str_8 => try reader.readInt(u8, .big),
                 .bin_16, .str_16 => try reader.readInt(u16, .big),
@@ -1413,7 +1413,7 @@ test "largest field name length" {
 fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: StructFormatOptions(T)) !T {
     switch (format_options.layout) {
         .map => {
-            const format = Spec.Format.decode(try reader.readByte());
+            const format = spec.Format.decode(try reader.readByte());
             const num_struct_fields = @typeInfo(T).@"struct".fields.len;
 
             switch (format) {
@@ -1432,7 +1432,7 @@ fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc:
             // TODO: yes is this O(n2) ... i don't care.
             for (0..num_struct_fields) |_| {
                 var field_name_buffer: [largestFieldNameLength(T)]u8 = undefined;
-                const format_key = Spec.Format.decode(try reader.readByte());
+                const format_key = spec.Format.decode(try reader.readByte());
                 const name_len = switch (format_key) {
                     .bin_8, .str_8 => try reader.readInt(u8, .big),
                     .bin_16, .str_16 => try reader.readInt(u16, .big),
@@ -1460,7 +1460,7 @@ fn decodeStruct(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc:
             return res;
         },
         .array => {
-            const format = Spec.Format.decode(try reader.readByte());
+            const format = spec.Format.decode(try reader.readByte());
             const num_struct_fields = @typeInfo(T).@"struct".fields.len;
 
             switch (format) {
@@ -1550,13 +1550,13 @@ test "decode struct array" {
     };
 
     const bytes: []const u8 = &.{
-        (Spec.Format{ .fixarray = .{ .len = 2 } }).encode(),
+        (spec.Format{ .fixarray = .{ .len = 2 } }).encode(),
         0x03,
         0x02,
     };
 
     const bad_bytes: []const u8 = &.{
-        (Spec.Format{ .fixarray = .{ .len = 3 } }).encode(),
+        (spec.Format{ .fixarray = .{ .len = 3 } }).encode(),
         0x03,
         0x02,
         0x03,
@@ -1567,7 +1567,7 @@ test "decode struct array" {
 }
 
 fn decodeOptional(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: anytype, format_options: FormatOptions(T)) !T {
-    const format = Spec.Format.decode(try reader.readByte());
+    const format = spec.Format.decode(try reader.readByte());
 
     const Child = @typeInfo(T).optional.child;
     switch (format) {
@@ -1612,7 +1612,7 @@ fn decodeBytes(comptime T: type, reader: anytype, seeker: anytype, maybe_alloc: 
     const has_sentinel = comptime hasSentinel(T);
     const Child = std.meta.Child(T);
     assert(Child == u8);
-    const format = Spec.Format.decode(try reader.readByte());
+    const format = spec.Format.decode(try reader.readByte());
     const expected_format_len = expectedArrayFormatLength(T);
     switch (format_options) {
         .bin => switch (format) {
@@ -1670,7 +1670,7 @@ fn decodeArrayArray(comptime T: type, reader: anytype, seeker: anytype, maybe_al
     const has_sentinel = comptime hasSentinel(T);
     const Child = std.meta.Child(T);
     assert(Child != u8);
-    const format = Spec.Format.decode(try reader.readByte());
+    const format = spec.Format.decode(try reader.readByte());
     const expected_format_len = expectedArrayFormatLength(T);
     switch (format) {
         .fixarray, .array_16, .array_32 => {},
@@ -1710,7 +1710,7 @@ fn decodeArrayMap(comptime T: type, reader: anytype, seeker: anytype, maybe_allo
     comptime assert(Child != u8);
     comptime assert(canBeKeyValuePair(Child) == true);
 
-    const format = Spec.Format.decode(try reader.readByte());
+    const format = spec.Format.decode(try reader.readByte());
     const expected_format_len = @typeInfo(T).array.len;
     switch (format) {
         .fixmap, .map_16, .map_32 => {},
@@ -1761,12 +1761,12 @@ test "decode slice map" {
     const expected: []const MapItem = &.{.{ .key = "foo", .value = "bar" }};
 
     const raw: []const u8 = &.{
-        (Spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
-        (Spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
+        (spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
+        (spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
         'f',
         'o',
         'o',
-        (Spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
+        (spec.Format{ .fixstr = .{ .len = 3 } }).encode(),
         'b',
         'a',
         'r',
@@ -1783,7 +1783,7 @@ test "decode array map first field is key" {
     };
     const expected: [1]MapItem = .{.{ .key = 3, .value = 4 }};
     const raw: []const u8 = &.{
-        (Spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
+        (spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
         3,
         4,
     };
@@ -1798,7 +1798,7 @@ test "decode array map second field is key" {
     };
     const expected: [1]MapItem = .{.{ .key = 3, .value = 4 }};
     const raw: []const u8 = &.{
-        (Spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
+        (spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
         3,
         4,
     };
@@ -1839,7 +1839,7 @@ test "decode array sentinel invalid" {
 }
 
 fn decodeBool(reader: anytype) error{ Invalid, EndOfStream }!bool {
-    const format = Spec.Format.decode(try reader.readByte());
+    const format = spec.Format.decode(try reader.readByte());
     return switch (format) {
         .true => true,
         .false => false,
@@ -1854,7 +1854,7 @@ test "decode bool" {
 }
 
 fn decodeInt(comptime T: type, reader: anytype) error{ Invalid, EndOfStream }!T {
-    const format = Spec.Format.decode(try reader.readByte());
+    const format = spec.Format.decode(try reader.readByte());
     if (@typeInfo(T).int.bits > 64) @compileError("message pack does not support integers larger than 64 bits.");
     switch (format) {
         .positive_fixint => |val| return std.math.cast(T, val.value) orelse return error.Invalid,
@@ -1883,7 +1883,7 @@ test "decode int" {
 }
 
 fn decodeFloat(comptime T: type, reader: anytype) error{ Invalid, EndOfStream }!T {
-    const format = Spec.Format.decode(try reader.readByte());
+    const format = spec.Format.decode(try reader.readByte());
     return switch (@typeInfo(T).float.bits) {
         32 => switch (format) {
             .float_32 => @bitCast(try reader.readInt(u32, .big)),

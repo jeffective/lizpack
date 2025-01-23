@@ -80,6 +80,13 @@ You can customize how types are formatted in message pack:
 
 See [examples](examples/examples.zig) for how to do it.
 
+## Manual Encoding / Decoding
+
+If you require the finest level of control over how data is encoded and decoded, the `lizpack.manual` API
+may suit your use case.
+
+See [examples](examples/examples.zig) for how to do it.
+
 ## Examples
 
 ```zig

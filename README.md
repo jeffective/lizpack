@@ -140,6 +140,10 @@ And import the library to begin using it:
 const lizpack = @import("lizpack");
 ```
 
+## Zig Version
+
+Please refer to the `minimum_zig_version` field of the [`build.zig.zon`](/build.zig.zon).
+
 ## TODO
 
 - [ ] refactor: use of has_sentinel

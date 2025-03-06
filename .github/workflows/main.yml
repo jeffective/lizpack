@@ -6,8 +6,8 @@ on:
   pull_request:
     branches:
       - main
-  schedule:
-    - cron: '20 0 * * *'
+  # schedule:
+  #   - cron: '20 0 * * *'
 
 jobs:
   build:
@@ -20,7 +20,7 @@ jobs:
       - name: Setup Zig Compiler
         uses: mlugg/setup-zig@v1.2.1
         with:
-          version: master
+          version: 0.14.0
 
       - name: Build and test Zig Project
         run: zig build

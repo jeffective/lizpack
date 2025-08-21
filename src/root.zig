@@ -25,10 +25,14 @@ pub fn EncodeOptions(comptime T: type) type {
         format: FormatOptions(T) = FormatOptionsDefault(T),
     };
 }
+/// Encode the value to MessagePack bytes with format customizations.
+pub fn encode(value: anytype, out: *std.Io.Writer, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))!void {
+    try encodeAny(value, out, options.format);
+}
 
 /// Encode the value to MessagePack bytes with format customizations.
 /// Writes to the `out` parameter.
-pub fn encode(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))![]u8 {
+fn testEncode(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))![]u8 {
     var fbs = std.Io.Writer.fixed(out);
     try encodeAny(value, &fbs, options.format);
     // TODO: fix this
@@ -37,18 +41,6 @@ pub fn encode(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value)))
     // }
     return fbs.buffered();
 }
-
-/// Encode the value to MessagePack bytes in a bounded array.
-/// Unbounded size types (slices) are not supported.
-/// No errors though!
-// pub fn encodeBounded(value: anytype, comptime options: EncodeOptions(@TypeOf(value))) std.BoundedArray(u8, largestEncodedSize(@TypeOf(value), options.format)) {
-//     var res = std.BoundedArray(u8, largestEncodedSize(@TypeOf(value), options.format)){};
-//     var fbs = std.Io.fixedBufferStream(res.buffer[0..]);
-//     encodeAny(value, fbs.writer(), options.format) catch unreachable;
-//     res.len = fbs.getWritten().len;
-//     return res;
-// }
-// TODO: ^
 
 pub fn EncodeAllocError(comptime T: type) type {
     if (containsSlice(T)) {
@@ -64,20 +56,6 @@ pub fn EncodeAllocError(comptime T: type) type {
     }
 }
 
-/// Encode the value to MessagePack bytes. Allocates enough bytes as needed.
-/// Caller owns the returned slice of encoded bytes (caller is responsible for freeing the returned memory).
-pub fn encodeAlloc(allocator: std.mem.Allocator, value: anytype, options: EncodeOptions(@TypeOf(value))) EncodeAllocError(@TypeOf(value))![]u8 {
-    var writer = std.Io.Writer.Allocating.init(allocator);
-    defer writer.deinit();
-    try encodeAny(value, &writer.writer, options.format);
-    const slice = try writer.toOwnedSlice();
-    errdefer unreachable;
-    // if (comptime !containsSlice(@TypeOf(value))) {
-    //     assert(largestEncodedSize(@TypeOf(value), options.format) >= slice.len);
-    // }
-    return slice;
-}
-
 pub fn DecodeOptions(comptime T: type) type {
     return struct {
         format: FormatOptions(T) = FormatOptionsDefault(T),
@@ -87,7 +65,7 @@ pub fn DecodeOptions(comptime T: type) type {
 /// Decode from MessagePack bytes to stack allocated value with format customizations.
 pub fn decode(comptime T: type, in: []const u8, options: DecodeOptions(T)) error{ Invalid, ReadFailed }!T {
     var fbs = std.Io.Reader.fixed(in);
-    const res = decodeAny(T, &fbs, &fbs, null, options.format) catch return error.Invalid;
+    const res = decodeAny(T, &fbs, null, options.format) catch return error.Invalid;
     return res;
 }
 
@@ -112,7 +90,7 @@ pub fn decodeAlloc(allocator: std.mem.Allocator, comptime T: type, in: []const u
     errdefer allocator.destroy(arena);
     arena.* = .init(allocator);
     errdefer arena.deinit();
-    const res = decodeAny(T, &fbs, &fbs, arena.allocator(), options.format) catch |err| switch (err) {
+    const res = decodeAny(T, &fbs, arena.allocator(), options.format) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Invalid => return error.Invalid,
         error.EndOfStream => return error.Invalid,
@@ -241,33 +219,6 @@ pub fn largestEncodedSize(comptime T: type, format_options: FormatOptions(T)) us
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
     };
 }
-
-test "encode alloc" {
-    const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
-    const slice = try encodeAlloc(std.testing.allocator, expected, .{});
-    defer std.testing.allocator.free(slice);
-    try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
-}
-
-test "encodeAlloc failing allocator" {
-    const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
-    try std.testing.expectError(
-        error.WriteFailed,
-        encodeAlloc(std.testing.failing_allocator, expected, .{}),
-    );
-}
-
-// test "encode bounded" {
-//     const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
-//     const slice = encodeBounded(expected, .{}).slice();
-//     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
-// }
-// TODO: ^
-
-// test "byte stream too long returns error" {
-//     try std.testing.expectError(error.Invalid, decode(bool, &.{ 0xc3, 0x00 }, .{}));
-// }
-// TODO: unlikely test to come back
 
 fn containsSlice(comptime T: type) bool {
     return switch (@typeInfo(T)) {
@@ -458,7 +409,7 @@ test "round trip slice map first field is key" {
     };
     const expected: []const MapItem = &.{.{ .key = 3, .value = 4 }};
     var out: [64]u8 = undefined;
-    const slice = try encode(expected, &out, .{ .format = .{ .layout = .map_item_first_field_is_key } });
+    const slice = try testEncode(expected, &out, .{ .format = .{ .layout = .map_item_first_field_is_key } });
     const decoded = try decodeAlloc(std.testing.allocator, @TypeOf(expected), slice, .{ .format = .{ .layout = .map_item_first_field_is_key } });
     defer decoded.deinit();
     try std.testing.expectEqualDeep(expected, decoded.value);
@@ -488,7 +439,7 @@ fn encodeSlice(value: anytype, writer: anytype, format_options: ArrayFormatOptio
 test "round trip slice" {
     var out: [64]u8 = undefined;
     const expected: []const bool = &.{ true, false, true };
-    const slice = try encode(expected, &out, .{});
+    const slice = try testEncode(expected, &out, .{});
     const decoded = try decodeAlloc(std.testing.allocator, @TypeOf(expected), slice, .{});
     defer decoded.deinit();
     try std.testing.expectEqualSlices(bool, expected, decoded.value);
@@ -514,14 +465,14 @@ fn encodeUnion(value: anytype, writer: anytype, format_options: UnionFormatOptio
 // test "round trip union" {
 //     var out: [1000]u8 = undefined;
 //     const expected: union(enum) { foo: u8, bar: u16 } = .{ .foo = 3 };
-//     const slice = try encode(expected, &out, .{});
+//     const slice = try testEncode(expected, &out, .{});
 //     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 // }
 
 // test "round trip union map" {
 //     var out: [1000]u8 = undefined;
 //     const expected: union(enum) { foo: u8, bar: u16, bazzz: u16 } = .{ .foo = 3 };
-//     const slice = try encode(expected, &out, .{ .format = .{ .layout = .map } });
+//     const slice = try testEncode(expected, &out, .{ .format = .{ .layout = .map } });
 //     try std.testing.expectEqual(
 //         expected,
 //         decode(@TypeOf(expected), slice, .{ .format = .{ .layout = .map } }),
@@ -550,21 +501,21 @@ fn encodeEnum(value: anytype, writer: anytype, format_options: EnumFormatOptions
 test "round trip enum" {
     var out: [1000]u8 = undefined;
     const expected: enum { foo, bar } = .foo;
-    const slice = try encode(expected, &out, .{});
+    const slice = try testEncode(expected, &out, .{});
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
 test "round trip str" {
     var out: [1000]u8 = undefined;
     const expected: enum { foo, bar } = .foo;
-    const slice = try encode(expected, &out, .{ .format = .str });
+    const slice = try testEncode(expected, &out, .{ .format = .str });
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{ .format = .str }));
 }
 
 test "encode enum as str" {
     var out: [1000]u8 = undefined;
     const expected: enum { foo, bar } = .foo;
-    const slice = try encode(expected, &out, .{ .format = .str });
+    const slice = try testEncode(expected, &out, .{ .format = .str });
     try std.testing.expectEqualSlices(u8, &.{ 0b10100011, 'f', 'o', 'o' }, slice);
 }
 
@@ -594,7 +545,7 @@ fn encodeStruct(value: anytype, writer: anytype, format_options: StructFormatOpt
 test "round trip struct" {
     var out: [1000]u8 = undefined;
     const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
-    const slice = try encode(expected, &out, .{});
+    const slice = try testEncode(expected, &out, .{});
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
@@ -602,7 +553,7 @@ test "round trip struct array" {
     var out: [1000]u8 = undefined;
     const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
     const format: FormatOptions(@TypeOf(expected)) = .{ .layout = .array };
-    const slice = try encode(expected, &out, .{ .format = format });
+    const slice = try testEncode(expected, &out, .{ .format = format });
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{ .format = format }));
 }
 
@@ -717,7 +668,7 @@ fn encodeVector(value: anytype, writer: anytype, format_options: ArrayFormatOpti
 test "round trip vector" {
     var out: [356]u8 = undefined;
     const expected: @Vector(56, u8) = @splat(34);
-    const slice = try encode(expected, &out, .{});
+    const slice = try testEncode(expected, &out, .{});
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
@@ -733,14 +684,14 @@ fn encodeOptional(value: anytype, writer: anytype, format_options: FormatOptions
 test "round trip optional" {
     var out: [64]u8 = undefined;
     const expected: ?f64 = null;
-    const slice = try encode(expected, &out, .{});
+    const slice = try testEncode(expected, &out, .{});
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
 test "round trip optional 2" {
     var out: [64]u8 = undefined;
     const expected: ?f64 = 12.3;
-    const slice = try encode(expected, &out, .{});
+    const slice = try testEncode(expected, &out, .{});
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
@@ -843,7 +794,7 @@ test "round trip array map first field is key" {
     };
     const expected: [1]MapItem = .{.{ .key = 3, .value = 4 }};
     var out: [64]u8 = undefined;
-    const slice = try encode(expected, &out, .{ .format = .{ .layout = .map_item_first_field_is_key } });
+    const slice = try testEncode(expected, &out, .{ .format = .{ .layout = .map_item_first_field_is_key } });
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{ .format = .{ .layout = .map_item_first_field_is_key } }));
 }
 
@@ -854,7 +805,7 @@ test "round trip array map second field is key" {
     };
     const expected: [1]MapItem = .{.{ .key = 3, .value = 4 }};
     var out: [64]u8 = undefined;
-    const slice = try encode(expected, &out, .{ .format = .{ .layout = .map_item_second_field_is_key } });
+    const slice = try testEncode(expected, &out, .{ .format = .{ .layout = .map_item_second_field_is_key } });
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{ .format = .{ .layout = .map_item_second_field_is_key } }));
 }
 
@@ -913,7 +864,7 @@ fn encodeBinStrArrayFormat(len: comptime_int, family: enum { bin, str, array }, 
 test "round trip array" {
     var out: [64]u8 = undefined;
     const expected: [3]bool = .{ true, false, true };
-    const slice = try encode(expected, &out, .{});
+    const slice = try testEncode(expected, &out, .{});
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
@@ -934,14 +885,14 @@ fn encodeFloat(value: anytype, writer: anytype) !void {
 test "round trip float 64" {
     var out: [64]u8 = undefined;
     const expected: f64 = 12.35;
-    const slice = try encode(expected, &out, .{});
+    const slice = try testEncode(expected, &out, .{});
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
 test "round trip float 32" {
     var out: [64]u8 = undefined;
     const expected: f32 = 12.35;
-    const slice = try encode(expected, &out, .{});
+    const slice = try testEncode(expected, &out, .{});
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
@@ -994,9 +945,9 @@ fn encodeInt(value: anytype, writer: anytype) !void {
 
 test "encode int" {
     var out1: [1]u8 = undefined;
-    try std.testing.expectEqualSlices(u8, &.{0x00}, try encode(@as(u5, 0), &out1, .{}));
-    try std.testing.expectEqualSlices(u8, &.{0xFF}, try encode(@as(i5, -1), &out1, .{}));
-    try std.testing.expectEqualSlices(u8, &.{0xE0}, try encode(@as(i6, -32), &out1, .{}));
+    try std.testing.expectEqualSlices(u8, &.{0x00}, try testEncode(@as(u5, 0), &out1, .{}));
+    try std.testing.expectEqualSlices(u8, &.{0xFF}, try testEncode(@as(i5, -1), &out1, .{}));
+    try std.testing.expectEqualSlices(u8, &.{0xE0}, try testEncode(@as(i6, -32), &out1, .{}));
 }
 
 fn encodeBool(value: anytype, writer: anytype) !void {
@@ -1008,45 +959,45 @@ fn encodeBool(value: anytype, writer: anytype) !void {
 
 test "encode bool" {
     var out: [1]u8 = undefined;
-    try std.testing.expectEqualSlices(u8, &.{0xc3}, try encode(true, &out, .{}));
-    try std.testing.expectEqualSlices(u8, &.{0xc2}, try encode(false, &out, .{}));
+    try std.testing.expectEqualSlices(u8, &.{0xc3}, try testEncode(true, &out, .{}));
+    try std.testing.expectEqualSlices(u8, &.{0xc2}, try testEncode(false, &out, .{}));
 }
 
 test "roundtrip bool" {
     var out: [64]u8 = undefined;
     const expected = true;
-    const slice = try encode(expected, &out, .{});
+    const slice = try testEncode(expected, &out, .{});
     try std.testing.expectEqual(expected, decode(@TypeOf(expected), slice, .{}));
 }
 
-fn decodeAny(comptime T: type, reader: *std.Io.Reader, seeker: anytype, maybe_alloc: anytype, format_options: FormatOptions(T)) !T {
+fn decodeAny(comptime T: type, reader: *std.Io.Reader, maybe_alloc: anytype, format_options: FormatOptions(T)) !T {
     switch (@typeInfo(T)) {
         .bool => return try decodeBool(reader),
         .int => return try decodeInt(T, reader),
         .float => return try decodeFloat(T, reader),
-        .array, .vector => return try decodeArray(T, reader, seeker, maybe_alloc, format_options),
-        .optional => return try decodeOptional(T, reader, seeker, maybe_alloc, format_options),
-        .@"struct" => return try decodeStruct(T, reader, seeker, maybe_alloc, format_options),
+        .array, .vector => return try decodeArray(T, reader, maybe_alloc, format_options),
+        .optional => return try decodeOptional(T, reader, maybe_alloc, format_options),
+        .@"struct" => return try decodeStruct(T, reader, maybe_alloc, format_options),
         .@"enum" => return try decodeEnum(T, reader, format_options),
         // TODO
         // .@"union" => return try decodeUnion(T, reader, seeker, maybe_alloc, format_options),
-        .pointer => return try decodePointer(T, reader, seeker, maybe_alloc, format_options),
+        .pointer => return try decodePointer(T, reader, maybe_alloc, format_options),
 
         else => @compileError("type: " ++ @typeName(T) ++ " not supported."),
     }
     unreachable;
 }
 
-fn decodePointer(comptime T: type, reader: *std.Io.Reader, seeker: anytype, alloc: std.mem.Allocator, format_options: FormatOptions(T)) !T {
+fn decodePointer(comptime T: type, reader: *std.Io.Reader, alloc: std.mem.Allocator, format_options: FormatOptions(T)) !T {
     switch (@typeInfo(T).pointer.size) {
         .one => {
             const Child = @typeInfo(T).pointer.child;
             const res = try alloc.create(Child);
             errdefer alloc.destroy(res);
-            res.* = try decodeAny(Child, reader, seeker, alloc, format_options);
+            res.* = try decodeAny(Child, reader, alloc, format_options);
             return res;
         },
-        .slice => return try decodeSlice(T, reader, seeker, alloc, format_options),
+        .slice => return try decodeSlice(T, reader, alloc, format_options),
         else => @compileError("unsupported type " ++ @typeName(T)),
     }
 }
@@ -1057,7 +1008,7 @@ test "decode pointer one" {
     try std.testing.expectEqual(true, decoded.value.*);
 }
 
-fn decodeSliceBytes(comptime T: type, reader: *std.Io.Reader, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
+fn decodeSliceBytes(comptime T: type, reader: *std.Io.Reader, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
     const has_sentinel = comptime hasSentinel(T);
     const Child = std.meta.Child(T);
     assert(Child == u8);
@@ -1103,7 +1054,7 @@ fn decodeSliceBytes(comptime T: type, reader: *std.Io.Reader, seeker: anytype, a
         .fixarray, .array_16, .array_32 => {
             for (0..decode_len) |i| {
                 assert(Child == u8);
-                res[i] = try decodeAny(Child, reader, seeker, alloc, {});
+                res[i] = try decodeAny(Child, reader, alloc, {});
             }
         },
         .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
@@ -1121,7 +1072,7 @@ fn decodeSliceBytes(comptime T: type, reader: *std.Io.Reader, seeker: anytype, a
 }
 
 // TODO: better name!
-fn decodeSliceArray(comptime T: type, reader: *std.Io.Reader, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
+fn decodeSliceArray(comptime T: type, reader: *std.Io.Reader, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
     const has_sentinel = comptime hasSentinel(T);
     const Child = std.meta.Child(T);
     comptime assert(Child != u8);
@@ -1152,14 +1103,14 @@ fn decodeSliceArray(comptime T: type, reader: *std.Io.Reader, seeker: anytype, a
         .fixarray, .array_16, .array_32 => {
             for (0..decode_len) |i| {
                 if (comptime canBeKeyValuePair(Child)) {
-                    res[i] = try decodeAny(Child, reader, seeker, alloc, format_options.asChildStructFormatOptions());
+                    res[i] = try decodeAny(Child, reader, alloc, format_options.asChildStructFormatOptions());
                 } else {
-                    res[i] = try decodeAny(Child, reader, seeker, alloc, format_options);
+                    res[i] = try decodeAny(Child, reader, alloc, format_options);
                 }
             }
             if (@typeInfo(T).pointer.sentinel_ptr) |sentinel| {
                 const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-                if (try decodeAny(Child, reader, seeker, alloc, format_options) != sentinel_value) return error.Invalid;
+                if (try decodeAny(Child, reader, alloc, format_options) != sentinel_value) return error.Invalid;
             }
         },
         else => unreachable,
@@ -1167,7 +1118,7 @@ fn decodeSliceArray(comptime T: type, reader: *std.Io.Reader, seeker: anytype, a
     return res;
 }
 
-fn decodeSliceMap(comptime T: type, reader: *std.Io.Reader, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
+fn decodeSliceMap(comptime T: type, reader: *std.Io.Reader, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
     comptime assert(hasSentinel(T) == false); // doesn't make sense to have sentinel on maps
     const Child = std.meta.Child(T);
     comptime assert(Child != u8);
@@ -1193,8 +1144,8 @@ fn decodeSliceMap(comptime T: type, reader: *std.Io.Reader, seeker: anytype, all
                 const ValueType = std.meta.fields(Child)[1].type;
                 const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
                 comptime assert(std.meta.fields(Child).len == 2);
-                @field(res[i], std.meta.fieldNames(Child)[0]) = try decodeAny(KeyType, reader, seeker, alloc, key_format);
-                @field(res[i], std.meta.fieldNames(Child)[1]) = try decodeAny(ValueType, reader, seeker, alloc, value_format);
+                @field(res[i], std.meta.fieldNames(Child)[0]) = try decodeAny(KeyType, reader, alloc, key_format);
+                @field(res[i], std.meta.fieldNames(Child)[1]) = try decodeAny(ValueType, reader, alloc, value_format);
             },
             .map_item_second_field_is_key => {
                 const KeyType = std.meta.fields(Child)[1].type;
@@ -1202,8 +1153,8 @@ fn decodeSliceMap(comptime T: type, reader: *std.Io.Reader, seeker: anytype, all
                 const ValueType = std.meta.fields(Child)[0].type;
                 const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
                 comptime assert(std.meta.fields(Child).len == 2);
-                @field(res[i], std.meta.fieldNames(Child)[1]) = try decodeAny(KeyType, reader, seeker, alloc, key_format);
-                @field(res[i], std.meta.fieldNames(Child)[0]) = try decodeAny(ValueType, reader, seeker, alloc, value_format);
+                @field(res[i], std.meta.fieldNames(Child)[1]) = try decodeAny(KeyType, reader, alloc, key_format);
+                @field(res[i], std.meta.fieldNames(Child)[0]) = try decodeAny(ValueType, reader, alloc, value_format);
             },
             .map, .array => unreachable, // should be handled by decodeArrayArray
         }
@@ -1211,21 +1162,21 @@ fn decodeSliceMap(comptime T: type, reader: *std.Io.Reader, seeker: anytype, all
     return res;
 }
 
-fn decodeSlice(comptime T: type, reader: *std.Io.Reader, seeker: anytype, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
+fn decodeSlice(comptime T: type, reader: *std.Io.Reader, alloc: anytype, format_options: ArrayFormatOptions(T)) !T {
     const Child = std.meta.Child(T);
     if (Child == u8) {
         assert(@TypeOf(format_options) == BytesOptions);
-        return decodeSliceBytes(T, reader, seeker, alloc, format_options);
+        return decodeSliceBytes(T, reader, alloc, format_options);
         // TODO: can be key value pair
     } else switch (comptime canBeKeyValuePair(Child)) {
         true => {
             comptime assert(@TypeOf(format_options) == MapFormatOptions(T));
             switch (format_options.layout) {
-                .map, .array => return decodeSliceArray(T, reader, seeker, alloc, format_options),
-                .map_item_first_field_is_key, .map_item_second_field_is_key => return decodeSliceMap(T, reader, seeker, alloc, format_options),
+                .map, .array => return decodeSliceArray(T, reader, alloc, format_options),
+                .map_item_first_field_is_key, .map_item_second_field_is_key => return decodeSliceMap(T, reader, alloc, format_options),
             }
         },
-        false => return decodeSliceArray(T, reader, seeker, alloc, format_options),
+        false => return decodeSliceArray(T, reader, alloc, format_options),
     }
     unreachable;
 }
@@ -1417,7 +1368,7 @@ test "largest field name length" {
     try std.testing.expectEqual(4, largestFieldNameLength(Foo));
 }
 
-fn decodeStruct(comptime T: type, reader: *std.Io.Reader, seeker: anytype, maybe_alloc: anytype, format_options: StructFormatOptions(T)) !T {
+fn decodeStruct(comptime T: type, reader: *std.Io.Reader, maybe_alloc: anytype, format_options: StructFormatOptions(T)) !T {
     switch (format_options.layout) {
         .map => {
             const format = spec.Format.decode(try reader.takeByte());
@@ -1455,7 +1406,7 @@ fn decodeStruct(comptime T: type, reader: *std.Io.Reader, seeker: anytype, maybe
                         @field(res, field_name) = try decodeAny(
                             @FieldType(T, field_name),
                             reader,
-                            seeker,
+
                             maybe_alloc,
                             @field(format_options.fields, format_option_field_name),
                         );
@@ -1483,7 +1434,7 @@ fn decodeStruct(comptime T: type, reader: *std.Io.Reader, seeker: anytype, maybe
 
             var res: T = undefined;
             inline for (comptime std.meta.fieldNames(T), comptime std.meta.fieldNames(@TypeOf(format_options.fields))) |field_name, format_option_field_name| {
-                @field(res, field_name) = try decodeAny(@FieldType(T, field_name), reader, seeker, maybe_alloc, @field(format_options.fields, format_option_field_name));
+                @field(res, field_name) = try decodeAny(@FieldType(T, field_name), reader, maybe_alloc, @field(format_options.fields, format_option_field_name));
             }
             return res;
         },
@@ -1573,7 +1524,7 @@ test "decode struct array" {
     try std.testing.expectError(error.Invalid, decode(Foo, bad_bytes, .{ .format = .{ .layout = .array } }));
 }
 
-fn decodeOptional(comptime T: type, reader: *std.Io.Reader, seeker: anytype, maybe_alloc: anytype, format_options: FormatOptions(T)) !T {
+fn decodeOptional(comptime T: type, reader: *std.Io.Reader, maybe_alloc: anytype, format_options: FormatOptions(T)) !T {
     const format = spec.Format.decode(try reader.peekByte());
 
     const Child = @typeInfo(T).optional.child;
@@ -1581,7 +1532,7 @@ fn decodeOptional(comptime T: type, reader: *std.Io.Reader, seeker: anytype, may
         .nil => return null,
         else => {
             // need to recover last byte we just consumed parsing the format.
-            return try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+            return try decodeAny(Child, reader, maybe_alloc, format_options);
         },
     }
 }
@@ -1614,7 +1565,7 @@ fn expectedArrayFormatLength(comptime T: type) comptime_int {
     };
 }
 
-fn decodeBytes(comptime T: type, reader: *std.Io.Reader, seeker: anytype, maybe_alloc: anytype, format_options: BytesOptions) error{ Invalid, EndOfStream, ReadFailed }!T {
+fn decodeBytes(comptime T: type, reader: *std.Io.Reader, maybe_alloc: anytype, format_options: BytesOptions) error{ Invalid, EndOfStream, ReadFailed }!T {
     const has_sentinel = comptime hasSentinel(T);
     const Child = std.meta.Child(T);
     assert(Child == u8);
@@ -1652,7 +1603,7 @@ fn decodeBytes(comptime T: type, reader: *std.Io.Reader, seeker: anytype, maybe_
         .fixarray, .array_16, .array_32 => {
             for (0..decode_len) |i| {
                 assert(Child == u8);
-                res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, {});
+                res[i] = try decodeAny(Child, reader, maybe_alloc, {});
             }
         },
         .fixstr, .bin_8, .bin_16, .bin_32, .str_8, .str_16, .str_32 => {
@@ -1672,7 +1623,7 @@ fn decodeBytes(comptime T: type, reader: *std.Io.Reader, seeker: anytype, maybe_
 }
 
 // TODO: figure out better name!
-fn decodeArrayArray(comptime T: type, reader: *std.Io.Reader, seeker: anytype, maybe_alloc: anytype, format_options: ArrayFormatOptions(T)) error{ Invalid, EndOfStream, ReadFailed }!T {
+fn decodeArrayArray(comptime T: type, reader: *std.Io.Reader, maybe_alloc: anytype, format_options: ArrayFormatOptions(T)) error{ Invalid, EndOfStream, ReadFailed }!T {
     const has_sentinel = comptime hasSentinel(T);
     const Child = std.meta.Child(T);
     assert(Child != u8);
@@ -1693,22 +1644,22 @@ fn decodeArrayArray(comptime T: type, reader: *std.Io.Reader, seeker: anytype, m
     const decode_len = len - @as(comptime_int, @intFromBool(has_sentinel));
     for (0..decode_len) |i| {
         if (comptime canBeKeyValuePair(Child)) {
-            res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options.asChildStructFormatOptions());
+            res[i] = try decodeAny(Child, reader, maybe_alloc, format_options.asChildStructFormatOptions());
         } else {
-            res[i] = try decodeAny(Child, reader, seeker, maybe_alloc, format_options);
+            res[i] = try decodeAny(Child, reader, maybe_alloc, format_options);
         }
     }
     if (comptime hasSentinel(T)) {
         if (@typeInfo(T).array.sentinel_ptr) |sentinel| {
             const sentinel_value: Child = @as(*const Child, @ptrCast(sentinel)).*;
-            if (try decodeAny(Child, reader, seeker, maybe_alloc, format_options) != sentinel_value) return error.Invalid;
+            if (try decodeAny(Child, reader, maybe_alloc, format_options) != sentinel_value) return error.Invalid;
         }
     }
     return res;
 }
 
 // TODO: better name!
-fn decodeArrayMap(comptime T: type, reader: *std.Io.Reader, seeker: anytype, maybe_alloc: anytype, format_options: MapFormatOptions(T)) error{ Invalid, EndOfStream, ReadFailed }!T {
+fn decodeArrayMap(comptime T: type, reader: *std.Io.Reader, maybe_alloc: anytype, format_options: MapFormatOptions(T)) error{ Invalid, EndOfStream, ReadFailed }!T {
     const has_sentinel = @typeInfo(T).array.sentinel_ptr != null;
     comptime assert(has_sentinel == false); // sentinel doesn't make sense for messagepack maps;
     const Child = @typeInfo(T).array.child;
@@ -1739,8 +1690,8 @@ fn decodeArrayMap(comptime T: type, reader: *std.Io.Reader, seeker: anytype, may
                 const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
                 var child: Child = undefined;
                 comptime assert(std.meta.fields(Child).len == 2);
-                @field(child, std.meta.fieldNames(Child)[0]) = try decodeAny(KeyType, reader, seeker, maybe_alloc, key_format);
-                @field(child, std.meta.fieldNames(Child)[1]) = try decodeAny(ValueType, reader, seeker, maybe_alloc, value_format);
+                @field(child, std.meta.fieldNames(Child)[0]) = try decodeAny(KeyType, reader, maybe_alloc, key_format);
+                @field(child, std.meta.fieldNames(Child)[1]) = try decodeAny(ValueType, reader, maybe_alloc, value_format);
                 res[i] = child;
             },
             .map_item_second_field_is_key => {
@@ -1749,8 +1700,8 @@ fn decodeArrayMap(comptime T: type, reader: *std.Io.Reader, seeker: anytype, may
                 const ValueType = std.meta.fields(Child)[0].type;
                 const value_format = @field(format_options.fields, std.meta.fieldNames(Child)[1]);
                 comptime assert(std.meta.fields(Child).len == 2);
-                @field(res[i], std.meta.fieldNames(Child)[1]) = try decodeAny(KeyType, reader, seeker, maybe_alloc, key_format);
-                @field(res[i], std.meta.fieldNames(Child)[0]) = try decodeAny(ValueType, reader, seeker, maybe_alloc, value_format);
+                @field(res[i], std.meta.fieldNames(Child)[1]) = try decodeAny(KeyType, reader, maybe_alloc, key_format);
+                @field(res[i], std.meta.fieldNames(Child)[0]) = try decodeAny(ValueType, reader, maybe_alloc, value_format);
             },
             .map, .array => unreachable, // should be handled by decodeArrayArray
         }
@@ -1812,21 +1763,21 @@ test "decode array map second field is key" {
     try std.testing.expectEqual(expected, decoded);
 }
 
-fn decodeArray(comptime T: type, reader: *std.Io.Reader, seeker: anytype, maybe_alloc: anytype, format_options: ArrayFormatOptions(T)) error{ Invalid, EndOfStream, ReadFailed }!T {
+fn decodeArray(comptime T: type, reader: *std.Io.Reader, maybe_alloc: anytype, format_options: ArrayFormatOptions(T)) error{ Invalid, EndOfStream, ReadFailed }!T {
     const Child = std.meta.Child(T);
     if (Child == u8) {
         assert(@TypeOf(format_options) == BytesOptions);
-        return decodeBytes(T, reader, seeker, maybe_alloc, format_options);
+        return decodeBytes(T, reader, maybe_alloc, format_options);
         // TODO: can be key value pair
     } else switch (comptime canBeKeyValuePair(Child)) {
         true => {
             comptime assert(@TypeOf(format_options) == MapFormatOptions(T));
             switch (format_options.layout) {
-                .map, .array => return decodeArrayArray(T, reader, seeker, maybe_alloc, format_options),
-                .map_item_first_field_is_key, .map_item_second_field_is_key => return decodeArrayMap(T, reader, seeker, maybe_alloc, format_options),
+                .map, .array => return decodeArrayArray(T, reader, maybe_alloc, format_options),
+                .map_item_first_field_is_key, .map_item_second_field_is_key => return decodeArrayMap(T, reader, maybe_alloc, format_options),
             }
         },
-        false => return decodeArrayArray(T, reader, seeker, maybe_alloc, format_options),
+        false => return decodeArrayArray(T, reader, maybe_alloc, format_options),
     }
     unreachable;
 }

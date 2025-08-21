@@ -14,9 +14,10 @@ test "basic example" {
     };
 
     var out: [1000]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
     const expected: CustomerComplaint = .{ .user_id = 2345, .status = .reviewed };
-    const slice: []u8 = try lizpack.encode(expected, &out, .{});
-    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), slice, .{}));
+    try lizpack.encode(expected, &writer, .{});
+    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), writer.buffered(), .{}));
 }
 
 // test "basic example bounded" {
@@ -47,6 +48,7 @@ test "basic example 2" {
     };
 
     var out: [1000]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
     const expected: TemperatureMeasurement = .{
         .station_id = 456,
         .temperature_deg_c = 34.2,
@@ -54,14 +56,15 @@ test "basic example 2" {
         .longitude_deg = 23.234562,
         .altitude_m = 10034,
     };
-    const slice: []u8 = try lizpack.encode(expected, &out, .{});
-    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), slice, .{}));
+    try lizpack.encode(expected, &writer, .{});
+    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), writer.buffered(), .{}));
 }
 
 test {
     var out: [1]u8 = undefined;
-    const slice: []u8 = try lizpack.encode(false, &out, .{});
-    try std.testing.expectEqualSlices(u8, &.{0xc2}, slice);
+    var writer = std.Io.Writer.fixed(&out);
+    try lizpack.encode(false, &writer, .{});
+    try std.testing.expectEqualSlices(u8, &.{0xc2}, writer.buffered());
 }
 
 test "basic customize encoding" {
@@ -79,12 +82,13 @@ test "basic customize encoding" {
     };
 
     var out: [1000]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
     const expected: CustomerComplaint = .{
         .uuid = .{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
         .message = "Your software is horrible!",
     };
-    const slice: []u8 = try lizpack.encode(expected, &out, .{ .format = CustomerComplaint.format });
-    const decoded = try lizpack.decodeAlloc(std.testing.allocator, CustomerComplaint, slice, .{
+    try lizpack.encode(expected, &writer, .{ .format = CustomerComplaint.format });
+    const decoded = try lizpack.decodeAlloc(std.testing.allocator, CustomerComplaint, writer.buffered(), .{
         .format = CustomerComplaint.format,
     });
     defer decoded.deinit();
@@ -131,15 +135,17 @@ test "nested format customizations" {
     };
 
     var out: [1000]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
     const expected = my_user;
-    const slice = try lizpack.encode(expected, &out, .{ .format = User.format });
-    const decoded = try lizpack.decodeAlloc(std.testing.allocator, @TypeOf(expected), slice, .{ .format = User.format });
+    try lizpack.encode(expected, &writer, .{ .format = User.format });
+    const decoded = try lizpack.decodeAlloc(std.testing.allocator, @TypeOf(expected), writer.buffered(), .{ .format = User.format });
     defer decoded.deinit();
     try std.testing.expectEqualDeep(expected, decoded.value);
 }
 
 test "enum format customizations" {
     var out: [1000]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
     const MyEnum = enum {
         foo,
         bar,
@@ -148,27 +154,31 @@ test "enum format customizations" {
         pub const format_as_int: lizpack.FormatOptions(@This()) = .int;
     };
 
-    const slice = try lizpack.encode(MyEnum.foo, &out, .{ .format = MyEnum.format_as_str });
-    try std.testing.expectEqualSlices(u8, &.{ 0b10100011, 'f', 'o', 'o' }, slice);
+    try lizpack.encode(MyEnum.foo, &writer, .{ .format = MyEnum.format_as_str });
+    try std.testing.expectEqualSlices(u8, &.{ 0b10100011, 'f', 'o', 'o' }, writer.buffered());
 
-    const slice2 = try lizpack.encode(MyEnum.foo, &out, .{ .format = MyEnum.format_as_int });
-    try std.testing.expectEqualSlices(u8, &.{0}, slice2);
+    writer = std.Io.Writer.fixed(&out);
+    try lizpack.encode(MyEnum.foo, &writer, .{ .format = MyEnum.format_as_int });
+    try std.testing.expectEqualSlices(u8, &.{0}, writer.buffered());
 }
 
 test "array and slice format customizations" {
     var out: [1000]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
     const my_string: []const u8 = "foo";
 
     const format_as_bin: lizpack.FormatOptions(@TypeOf(my_string)) = .bin;
-    const slice = try lizpack.encode(my_string, &out, .{ .format = format_as_bin });
-    try std.testing.expectEqualSlices(u8, &.{ (lizpack.spec.Format{ .bin_8 = {} }).encode(), 3, 'f', 'o', 'o' }, slice);
+    try lizpack.encode(my_string, &writer, .{ .format = format_as_bin });
+    try std.testing.expectEqualSlices(u8, &.{ (lizpack.spec.Format{ .bin_8 = {} }).encode(), 3, 'f', 'o', 'o' }, writer.buffered());
 
+    writer = std.Io.Writer.fixed(&out);
     const format_as_string: lizpack.FormatOptions(@TypeOf(my_string)) = .str;
-    const slice2 = try lizpack.encode(my_string, &out, .{ .format = format_as_string });
-    try std.testing.expectEqualSlices(u8, &.{ 0b10100011, 'f', 'o', 'o' }, slice2);
+    try lizpack.encode(my_string, &writer, .{ .format = format_as_string });
+    try std.testing.expectEqualSlices(u8, &.{ 0b10100011, 'f', 'o', 'o' }, writer.buffered());
 
+    writer = std.Io.Writer.fixed(&out);
     const format_as_array: lizpack.FormatOptions(@TypeOf(my_string)) = .array;
-    const slice3 = try lizpack.encode(my_string, &out, .{ .format = format_as_array });
+    try lizpack.encode(my_string, &writer, .{ .format = format_as_array });
     try std.testing.expectEqualSlices(u8, &.{
         (lizpack.spec.Format{ .fixarray = .{ .len = 3 } }).encode(),
         (lizpack.spec.Format{ .uint_8 = {} }).encode(),
@@ -177,7 +187,7 @@ test "array and slice format customizations" {
         'o',
         (lizpack.spec.Format{ .uint_8 = {} }).encode(),
         'o',
-    }, slice3);
+    }, writer.buffered());
 }
 
 // test "union format customization" {
@@ -235,17 +245,9 @@ test "maps" {
         1,
     };
     var out: [1000]u8 = undefined;
-    const encoded = try lizpack.encode(roles, &out, .{ .format = format });
-    try std.testing.expectEqualSlices(u8, expected_bytes, encoded);
-}
-
-test "encodeAlloc" {
-    const expected: struct { foo: u8, bar: ?u16 } = .{ .foo = 12, .bar = null };
-    const slice = try lizpack.encodeAlloc(std.testing.allocator, expected, .{});
-    defer std.testing.allocator.free(slice);
-    // the point here is that we don't actually need to know the length of the encoded, we allocate as much as is needed
-    try std.testing.expectEqual(@as(usize, 12), slice.len);
-    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), slice, .{}));
+    var writer = std.Io.Writer.fixed(&out);
+    try lizpack.encode(roles, &writer, .{ .format = format });
+    try std.testing.expectEqualSlices(u8, expected_bytes, writer.buffered());
 }
 
 test "manual encoding" {

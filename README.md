@@ -57,6 +57,8 @@ const CustomerComplaint = struct {
 | `[:x]u8`                           | str ending in x                     |
 | `*T`                               | T                                   |
 
+> Decoding unions is currently not supported.
+
 > `str` is the default MessagePack type for `[]u8` because it is the smallest for short slices.
 
 Unsupported types:

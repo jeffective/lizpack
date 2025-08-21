@@ -29,7 +29,7 @@ pub fn EncodeOptions(comptime T: type) type {
 /// Encode the value to MessagePack bytes with format customizations.
 /// Writes to the `out` parameter.
 pub fn encode(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))![]u8 {
-    var fbs = std.io.Writer.fixed(out);
+    var fbs = std.Io.Writer.fixed(out);
     try encodeAny(value, &fbs, options.format);
     // TODO: fix this
     // if (comptime !containsSlice(@TypeOf(value))) {
@@ -43,7 +43,7 @@ pub fn encode(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value)))
 /// No errors though!
 // pub fn encodeBounded(value: anytype, comptime options: EncodeOptions(@TypeOf(value))) std.BoundedArray(u8, largestEncodedSize(@TypeOf(value), options.format)) {
 //     var res = std.BoundedArray(u8, largestEncodedSize(@TypeOf(value), options.format)){};
-//     var fbs = std.io.fixedBufferStream(res.buffer[0..]);
+//     var fbs = std.Io.fixedBufferStream(res.buffer[0..]);
 //     encodeAny(value, fbs.writer(), options.format) catch unreachable;
 //     res.len = fbs.getWritten().len;
 //     return res;

@@ -252,7 +252,8 @@ test "manual encoding" {
 
 test "manual decoding" {
     const raw: []const u8 = &.{@bitCast(@as(i8, -15))};
-    const decoded = try lizpack.manual.decode(std.testing.allocator, raw);
+    var reader = std.Io.Reader.fixed(raw);
+    const decoded = try lizpack.manual.decode(std.testing.allocator, &reader);
     defer decoded.deinit();
     switch (decoded.value) {
         .negative_fixint => |payload| try std.testing.expectEqual(-15, payload),

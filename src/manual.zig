@@ -94,24 +94,18 @@ pub fn Decoded(comptime T: type) type {
 }
 
 /// Caller is responsible for calling deinit in returned value to free it.
-pub fn decode(allocator: std.mem.Allocator, in: []const u8) error{ OutOfMemory, Invalid }!Decoded(Value) {
-    var fbs = std.io.fixedBufferStream(in);
+pub fn decode(allocator: std.mem.Allocator, reader: *std.Io.Reader) error{ OutOfMemory, Invalid, EndOfStream, ReadFailed }!Decoded(Value) {
     const arena = try allocator.create(std.heap.ArenaAllocator);
     errdefer allocator.destroy(arena);
     arena.* = .init(allocator);
     errdefer arena.deinit();
-    const res = decodeLeaky(arena.allocator(), fbs.reader()) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.Invalid => return error.Invalid,
-        error.EndOfStream => return error.Invalid,
-    };
-    if (fbs.pos != fbs.buffer.len) return error.Invalid;
-    return Decoded(Value){ .arena = arena, .value = res };
+    const value = try decodeLeaky(arena.allocator(), reader);
+    return Decoded(Value){ .arena = arena, .value = value };
 }
 
 /// Caller is responsible for using an arena to free returned memory.
-pub fn decodeLeaky(allocator: std.mem.Allocator, reader: anytype) !Value {
-    const format = spec.Format.decode(try reader.readByte());
+pub fn decodeLeaky(allocator: std.mem.Allocator, reader: *std.Io.Reader) error{ OutOfMemory, Invalid, EndOfStream, ReadFailed }!Value {
+    const format = spec.Format.decode(try reader.takeByte());
     switch (format) {
         .never_used => return error.Invalid,
         .positive_fixint => |fmt| return Value{ .positive_fixint = fmt.value },
@@ -119,62 +113,62 @@ pub fn decodeLeaky(allocator: std.mem.Allocator, reader: anytype) !Value {
         .true => return Value{ .bool = true },
         .false => return Value{ .bool = false },
         .nil => return Value{ .nil = {} },
-        .uint_8 => return Value{ .uint_8 = try reader.readInt(u8, .big) },
-        .uint_16 => return Value{ .uint_16 = try reader.readInt(u16, .big) },
-        .uint_32 => return Value{ .uint_32 = try reader.readInt(u32, .big) },
-        .uint_64 => return Value{ .uint_64 = try reader.readInt(u64, .big) },
-        .int_8 => return Value{ .int_8 = try reader.readInt(i8, .big) },
-        .int_16 => return Value{ .int_16 = try reader.readInt(i16, .big) },
-        .int_32 => return Value{ .int_32 = try reader.readInt(i32, .big) },
-        .int_64 => return Value{ .int_64 = try reader.readInt(i64, .big) },
-        .float_32 => return Value{ .float_32 = @bitCast(try reader.readInt(u32, .big)) },
-        .float_64 => return Value{ .float_64 = @bitCast(try reader.readInt(u64, .big)) },
+        .uint_8 => return Value{ .uint_8 = try reader.takeInt(u8, .big) },
+        .uint_16 => return Value{ .uint_16 = try reader.takeInt(u16, .big) },
+        .uint_32 => return Value{ .uint_32 = try reader.takeInt(u32, .big) },
+        .uint_64 => return Value{ .uint_64 = try reader.takeInt(u64, .big) },
+        .int_8 => return Value{ .int_8 = try reader.takeInt(i8, .big) },
+        .int_16 => return Value{ .int_16 = try reader.takeInt(i16, .big) },
+        .int_32 => return Value{ .int_32 = try reader.takeInt(i32, .big) },
+        .int_64 => return Value{ .int_64 = try reader.takeInt(i64, .big) },
+        .float_32 => return Value{ .float_32 = @bitCast(try reader.takeInt(u32, .big)) },
+        .float_64 => return Value{ .float_64 = @bitCast(try reader.takeInt(u64, .big)) },
         .fixext_1 => return Value{
             .fixext_1 = .{
-                .type = try reader.readInt(i8, .big),
+                .type = try reader.takeInt(i8, .big),
                 .data = blk: {
                     var bytes: [1]u8 = undefined;
-                    try reader.readNoEof(&bytes);
+                    try reader.readSliceAll(&bytes);
                     break :blk bytes;
                 },
             },
         },
         .fixext_2 => return Value{
             .fixext_2 = .{
-                .type = try reader.readInt(i8, .big),
+                .type = try reader.takeInt(i8, .big),
                 .data = blk: {
                     var bytes: [2]u8 = undefined;
-                    try reader.readNoEof(&bytes);
+                    try reader.readSliceAll(&bytes);
                     break :blk bytes;
                 },
             },
         },
         .fixext_4 => return Value{
             .fixext_4 = .{
-                .type = try reader.readInt(i8, .big),
+                .type = try reader.takeInt(i8, .big),
                 .data = blk: {
                     var bytes: [4]u8 = undefined;
-                    try reader.readNoEof(&bytes);
+                    try reader.readSliceAll(&bytes);
                     break :blk bytes;
                 },
             },
         },
         .fixext_8 => return Value{
             .fixext_8 = .{
-                .type = try reader.readInt(i8, .big),
+                .type = try reader.takeInt(i8, .big),
                 .data = blk: {
                     var bytes: [8]u8 = undefined;
-                    try reader.readNoEof(&bytes);
+                    try reader.readSliceAll(&bytes);
                     break :blk bytes;
                 },
             },
         },
         .fixext_16 => return Value{
             .fixext_16 = .{
-                .type = try reader.readInt(i8, .big),
+                .type = try reader.takeInt(i8, .big),
                 .data = blk: {
                     var bytes: [16]u8 = undefined;
-                    try reader.readNoEof(&bytes);
+                    try reader.readSliceAll(&bytes);
                     break :blk bytes;
                 },
             },
@@ -199,47 +193,47 @@ pub fn decodeLeaky(allocator: std.mem.Allocator, reader: anytype) !Value {
         .fixstr => |fmt| {
             const res = try allocator.alloc(u8, fmt.len);
             errdefer allocator.free(res);
-            try reader.readNoEof(res);
+            try reader.readSliceAll(res);
             return Value{ .fixstr = res };
         },
         .bin_8 => {
-            const res = try allocator.alloc(u8, try reader.readInt(u8, .big));
+            const res = try allocator.alloc(u8, try reader.takeInt(u8, .big));
             errdefer allocator.free(res);
-            try reader.readNoEof(res);
+            try reader.readSliceAll(res);
             return Value{ .bin_8 = res };
         },
         .bin_16 => {
-            const res = try allocator.alloc(u8, try reader.readInt(u16, .big));
+            const res = try allocator.alloc(u8, try reader.takeInt(u16, .big));
             errdefer allocator.free(res);
-            try reader.readNoEof(res);
+            try reader.readSliceAll(res);
             return Value{ .bin_16 = res };
         },
         .bin_32 => {
-            const res = try allocator.alloc(u8, try reader.readInt(u32, .big));
+            const res = try allocator.alloc(u8, try reader.takeInt(u32, .big));
             errdefer allocator.free(res);
-            try reader.readNoEof(res);
+            try reader.readSliceAll(res);
             return Value{ .bin_32 = res };
         },
         .str_8 => {
-            const res = try allocator.alloc(u8, try reader.readInt(u8, .big));
+            const res = try allocator.alloc(u8, try reader.takeInt(u8, .big));
             errdefer allocator.free(res);
-            try reader.readNoEof(res);
+            try reader.readSliceAll(res);
             return Value{ .str_8 = res };
         },
         .str_16 => {
-            const res = try allocator.alloc(u8, try reader.readInt(u16, .big));
+            const res = try allocator.alloc(u8, try reader.takeInt(u16, .big));
             errdefer allocator.free(res);
-            try reader.readNoEof(res);
+            try reader.readSliceAll(res);
             return Value{ .str_16 = res };
         },
         .str_32 => {
-            const res = try allocator.alloc(u8, try reader.readInt(u32, .big));
+            const res = try allocator.alloc(u8, try reader.takeInt(u32, .big));
             errdefer allocator.free(res);
-            try reader.readNoEof(res);
+            try reader.readSliceAll(res);
             return Value{ .str_32 = res };
         },
         .map_16 => {
-            const res = try allocator.alloc(Value.MapItem, try reader.readInt(u16, .big));
+            const res = try allocator.alloc(Value.MapItem, try reader.takeInt(u16, .big));
             errdefer allocator.free(res);
             for (res) |*item| {
                 item.key = try decodeLeaky(allocator, reader);
@@ -248,7 +242,7 @@ pub fn decodeLeaky(allocator: std.mem.Allocator, reader: anytype) !Value {
             return Value{ .map_16 = res };
         },
         .map_32 => {
-            const res = try allocator.alloc(Value.MapItem, try reader.readInt(u32, .big));
+            const res = try allocator.alloc(Value.MapItem, try reader.takeInt(u32, .big));
             errdefer allocator.free(res);
             for (res) |*item| {
                 item.key = try decodeLeaky(allocator, reader);
@@ -257,7 +251,7 @@ pub fn decodeLeaky(allocator: std.mem.Allocator, reader: anytype) !Value {
             return Value{ .map_32 = res };
         },
         .array_16 => {
-            const res = try allocator.alloc(Value, try reader.readInt(u16, .big));
+            const res = try allocator.alloc(Value, try reader.takeInt(u16, .big));
             errdefer allocator.free(res);
             for (res) |*item| {
                 item.* = try decodeLeaky(allocator, reader);
@@ -265,7 +259,7 @@ pub fn decodeLeaky(allocator: std.mem.Allocator, reader: anytype) !Value {
             return Value{ .array_16 = res };
         },
         .array_32 => {
-            const res = try allocator.alloc(Value, try reader.readInt(u32, .big));
+            const res = try allocator.alloc(Value, try reader.takeInt(u32, .big));
             errdefer allocator.free(res);
             for (res) |*item| {
                 item.* = try decodeLeaky(allocator, reader);
@@ -273,24 +267,24 @@ pub fn decodeLeaky(allocator: std.mem.Allocator, reader: anytype) !Value {
             return Value{ .array_32 = res };
         },
         .ext_8 => {
-            const data = try allocator.alloc(u8, try reader.readInt(u8, .big));
+            const data = try allocator.alloc(u8, try reader.takeInt(u8, .big));
             errdefer allocator.free(data);
-            const typ = try reader.readInt(i8, .big);
-            try reader.readNoEof(data);
+            const typ = try reader.takeInt(i8, .big);
+            try reader.readSliceAll(data);
             return Value{ .ext_8 = .{ .type = typ, .data = data } };
         },
         .ext_16 => {
-            const data = try allocator.alloc(u8, try reader.readInt(u16, .big));
+            const data = try allocator.alloc(u8, try reader.takeInt(u16, .big));
             errdefer allocator.free(data);
-            const typ = try reader.readInt(i8, .big);
-            try reader.readNoEof(data);
+            const typ = try reader.takeInt(i8, .big);
+            try reader.readSliceAll(data);
             return Value{ .ext_16 = .{ .type = typ, .data = data } };
         },
         .ext_32 => {
-            const data = try allocator.alloc(u8, try reader.readInt(u32, .big));
+            const data = try allocator.alloc(u8, try reader.takeInt(u32, .big));
             errdefer allocator.free(data);
-            const typ = try reader.readInt(i8, .big);
-            try reader.readNoEof(data);
+            const typ = try reader.takeInt(i8, .big);
+            try reader.readSliceAll(data);
             return Value{ .ext_32 = .{ .type = typ, .data = data } };
         },
     }
@@ -480,7 +474,8 @@ test "encode negative fix int" {
 test "decode negative fix int" {
     const raw: []const u8 = &.{@bitCast(@as(i8, -15))};
     const expected: Value = .{ .negative_fixint = -15 };
-    const decoded = try decode(std.testing.allocator, raw);
+    var reader = std.Io.Reader.fixed(raw);
+    const decoded = try decode(std.testing.allocator, &reader);
     defer decoded.deinit();
     try std.testing.expectEqualDeep(expected, decoded.value);
 }

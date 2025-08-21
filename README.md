@@ -12,9 +12,14 @@ A MessagePack Library for Zig
 A simple API:
 
 ```zig
-lizpack.encode(...)
-lizpack.decode(...)
-lizpack.decodeAlloc(...)
+// encode
+try lizpack.encode(YourTypeHere{}, writer, .{})
+
+// decode to stack allocated memory
+const result: YourTypeHere = try lizpack.decode(YourTypeHere, reader, .{})
+
+// decode to heap allocated memory
+const result: *YourTypeHere = try lizpack.decodeAlloc(allocator, *YourTypeHere, reader, .{})
 ```
 
 Combines with your definition of your message structure:

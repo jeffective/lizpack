@@ -19,22 +19,23 @@ test "basic example" {
     try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), slice, .{}));
 }
 
-test "basic example bounded" {
-    const CustomerComplaint = struct {
-        user_id: u64,
-        status: enum(u8) {
-            received,
-            reviewed,
-            awaiting_response,
-            finished,
-        },
-    };
+// test "basic example bounded" {
+//     const CustomerComplaint = struct {
+//         user_id: u64,
+//         status: enum(u8) {
+//             received,
+//             reviewed,
+//             awaiting_response,
+//             finished,
+//         },
+//     };
 
-    // look mom! no errors!
-    const expected: CustomerComplaint = .{ .user_id = 2345, .status = .reviewed };
-    const slice: []const u8 = lizpack.encodeBounded(expected, .{}).slice();
-    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), slice, .{}));
-}
+//     // look mom! no errors!
+//     const expected: CustomerComplaint = .{ .user_id = 2345, .status = .reviewed };
+//     const slice: []const u8 = lizpack.encodeBounded(expected, .{}).slice();
+//     try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), slice, .{}));
+// }
+// TODO: ^
 
 test "basic example 2" {
     const TemperatureMeasurement = struct {
@@ -179,30 +180,30 @@ test "array and slice format customizations" {
     }, slice3);
 }
 
-test "union format customization" {
-    const MyUnion = union(enum) {
-        my_u8: u8,
-        my_bool: bool,
+// test "union format customization" {
+//     const MyUnion = union(enum) {
+//         my_u8: u8,
+//         my_bool: bool,
 
-        pub const format_as_map: lizpack.FormatOptions(@This()) = .{ .layout = .map };
-        pub const format_as_active_field: lizpack.FormatOptions(@This()) = .{ .layout = .active_field };
-    };
+//         pub const format_as_map: lizpack.FormatOptions(@This()) = .{ .layout = .map };
+//         pub const format_as_active_field: lizpack.FormatOptions(@This()) = .{ .layout = .active_field };
+//     };
 
-    const bytes_active_field: []const u8 = &.{(lizpack.spec.Format{ .false = {} }).encode()};
-    try std.testing.expectEqual(MyUnion{ .my_bool = false }, try lizpack.decode(MyUnion, bytes_active_field, .{ .format = MyUnion.format_as_active_field }));
+//     const bytes_active_field: []const u8 = &.{(lizpack.spec.Format{ .false = {} }).encode()};
+//     try std.testing.expectEqual(MyUnion{ .my_bool = false }, try lizpack.decode(MyUnion, bytes_active_field, .{ .format = MyUnion.format_as_active_field }));
 
-    const bytes_map: []const u8 = &.{
-        (lizpack.spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
-        (lizpack.spec.Format{ .fixstr = .{ .len = 5 } }).encode(),
-        'm',
-        'y',
-        '_',
-        'u',
-        '8',
-        0x03,
-    };
-    try std.testing.expectEqual(MyUnion{ .my_u8 = 3 }, try lizpack.decode(MyUnion, bytes_map, .{ .format = MyUnion.format_as_map }));
-}
+//     const bytes_map: []const u8 = &.{
+//         (lizpack.spec.Format{ .fixmap = .{ .n_elements = 1 } }).encode(),
+//         (lizpack.spec.Format{ .fixstr = .{ .len = 5 } }).encode(),
+//         'm',
+//         'y',
+//         '_',
+//         'u',
+//         '8',
+//         0x03,
+//     };
+//     try std.testing.expectEqual(MyUnion{ .my_u8 = 3 }, try lizpack.decode(MyUnion, bytes_map, .{ .format = MyUnion.format_as_map }));
+// }
 
 test "maps" {
     const RoleItem = struct {

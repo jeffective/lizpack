@@ -78,11 +78,11 @@ pub const MessagePackType = union(enum) {
     };
 };
 
-pub fn encodeAlloc(allocator: std.mem.Allocator, value: MessagePackType) error{ OutOfMemory, SliceLenTooLarge, InvalidNegativeFixInt }![]u8 {
-    var bytes = std.ArrayList(u8).init(allocator);
-    defer bytes.deinit();
-    try encodeRecursive(value, bytes.writer());
-    const slice = try bytes.toOwnedSlice();
+pub fn encodeAlloc(allocator: std.mem.Allocator, value: MessagePackType) error{ OutOfMemory, SliceLenTooLarge, InvalidNegativeFixInt, WriteFailed }![]u8 {
+    var writer = std.Io.Writer.Allocating.init(allocator);
+    defer writer.deinit();
+    try encodeRecursive(value, &writer.writer);
+    const slice = try writer.toOwnedSlice();
     errdefer unreachable;
     return slice;
 }

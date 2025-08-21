@@ -13,13 +13,13 @@ A simple API:
 
 ```zig
 // encode
-try lizpack.encode(YourTypeHere{}, writer, .{})
+try lizpack.encode(T{}, writer, .{})
 
 // decode to stack allocated memory
-const result: YourTypeHere = try lizpack.decode(YourTypeHere, reader, .{})
+const result: T = try lizpack.decode(T, reader, .{})
 
 // decode to heap allocated memory
-const result: *YourTypeHere = try lizpack.decodeAlloc(allocator, *YourTypeHere, reader, .{})
+const result: *T = try lizpack.decodeAlloc(allocator, *T, reader, .{})
 ```
 
 Combines with your definition of your message structure:

@@ -1,22 +1,25 @@
+//! To use this library:
+//!
+//! Refer to README.md.
+//!
+//! For developing this library:
+//!
+//! The default step runs all the tests. Just run `zig build`.
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    // msgpack module
     const lizpack = b.addModule("lizpack", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
-    // msgpack module unit tests
     const lib_unit_tests = b.addTest(.{
         .root_module = lizpack,
     });
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
     b.default_step.dependOn(&run_lib_unit_tests.step);
-
-    // examples
     const examples = b.createModule(.{
         .root_source_file = b.path("examples/examples.zig"),
         .target = target,

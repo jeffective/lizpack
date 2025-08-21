@@ -1,6 +1,6 @@
 .{
     .name = .lizpack,
-    .version = "0.7.2",
+    .version = "0.8.0",
     .minimum_zig_version = "0.15.0-dev.1572+47e652876",
     .fingerprint = 0xfb79de2ca48bfd41, // Changing this has security and trust implications.
     .paths = .{

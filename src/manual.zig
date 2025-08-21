@@ -1,11 +1,13 @@
+//! Provides extra-fine control over what is encoded. Provides a similar api to std.json.Value.
+
 const std = @import("std");
 
 const spec = @import("specification.zig");
 
-pub const MessagePackType = union(enum) {
+pub const Value = union(enum) {
     positive_fixint: u7,
     fixmap: []const MapItem,
-    fixarray: []const MessagePackType,
+    fixarray: []const Value,
     fixstr: []const u8,
     nil: void,
     bool: bool,
@@ -33,15 +35,15 @@ pub const MessagePackType = union(enum) {
     str_8: []const u8,
     str_16: []const u8,
     str_32: []const u8,
-    array_16: []const MessagePackType,
-    array_32: []const MessagePackType,
+    array_16: []const Value,
+    array_32: []const Value,
     map_16: []const MapItem,
     map_32: []const MapItem,
     negative_fixint: i6,
 
     pub const MapItem = struct {
-        key: MessagePackType,
-        value: MessagePackType,
+        key: Value,
+        value: Value,
     };
 
     pub const Fixext1 = struct {
@@ -78,15 +80,6 @@ pub const MessagePackType = union(enum) {
     };
 };
 
-pub fn encodeAlloc(allocator: std.mem.Allocator, value: MessagePackType) error{ OutOfMemory, SliceLenTooLarge, InvalidNegativeFixInt, WriteFailed }![]u8 {
-    var writer = std.Io.Writer.Allocating.init(allocator);
-    defer writer.deinit();
-    try encodeRecursive(value, &writer.writer);
-    const slice = try writer.toOwnedSlice();
-    errdefer unreachable;
-    return slice;
-}
-
 /// Call deinit() on this to free it.
 pub fn Decoded(comptime T: type) type {
     return struct {
@@ -100,41 +93,43 @@ pub fn Decoded(comptime T: type) type {
     };
 }
 
-pub fn decodeAlloc(allocator: std.mem.Allocator, in: []const u8) error{ OutOfMemory, Invalid }!Decoded(MessagePackType) {
+/// Caller is responsible for calling deinit in returned value to free it.
+pub fn decode(allocator: std.mem.Allocator, in: []const u8) error{ OutOfMemory, Invalid }!Decoded(Value) {
     var fbs = std.io.fixedBufferStream(in);
     const arena = try allocator.create(std.heap.ArenaAllocator);
     errdefer allocator.destroy(arena);
     arena.* = .init(allocator);
     errdefer arena.deinit();
-    const res = decodeRecursive(arena.allocator(), fbs.reader()) catch |err| switch (err) {
+    const res = decodeLeaky(arena.allocator(), fbs.reader()) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Invalid => return error.Invalid,
         error.EndOfStream => return error.Invalid,
     };
     if (fbs.pos != fbs.buffer.len) return error.Invalid;
-    return Decoded(MessagePackType){ .arena = arena, .value = res };
+    return Decoded(Value){ .arena = arena, .value = res };
 }
 
-pub fn decodeRecursive(allocator: std.mem.Allocator, reader: anytype) !MessagePackType {
+/// Caller is responsible for using an arena to free returned memory.
+pub fn decodeLeaky(allocator: std.mem.Allocator, reader: anytype) !Value {
     const format = spec.Format.decode(try reader.readByte());
     switch (format) {
         .never_used => return error.Invalid,
-        .positive_fixint => |fmt| return MessagePackType{ .positive_fixint = fmt.value },
-        .negative_fixint => |fmt| return MessagePackType{ .negative_fixint = @intCast(fmt.value) },
-        .true => return MessagePackType{ .bool = true },
-        .false => return MessagePackType{ .bool = false },
-        .nil => return MessagePackType{ .nil = {} },
-        .uint_8 => return MessagePackType{ .uint_8 = try reader.readInt(u8, .big) },
-        .uint_16 => return MessagePackType{ .uint_16 = try reader.readInt(u16, .big) },
-        .uint_32 => return MessagePackType{ .uint_32 = try reader.readInt(u32, .big) },
-        .uint_64 => return MessagePackType{ .uint_64 = try reader.readInt(u64, .big) },
-        .int_8 => return MessagePackType{ .int_8 = try reader.readInt(i8, .big) },
-        .int_16 => return MessagePackType{ .int_16 = try reader.readInt(i16, .big) },
-        .int_32 => return MessagePackType{ .int_32 = try reader.readInt(i32, .big) },
-        .int_64 => return MessagePackType{ .int_64 = try reader.readInt(i64, .big) },
-        .float_32 => return MessagePackType{ .float_32 = @bitCast(try reader.readInt(u32, .big)) },
-        .float_64 => return MessagePackType{ .float_64 = @bitCast(try reader.readInt(u64, .big)) },
-        .fixext_1 => return MessagePackType{
+        .positive_fixint => |fmt| return Value{ .positive_fixint = fmt.value },
+        .negative_fixint => |fmt| return Value{ .negative_fixint = @intCast(fmt.value) },
+        .true => return Value{ .bool = true },
+        .false => return Value{ .bool = false },
+        .nil => return Value{ .nil = {} },
+        .uint_8 => return Value{ .uint_8 = try reader.readInt(u8, .big) },
+        .uint_16 => return Value{ .uint_16 = try reader.readInt(u16, .big) },
+        .uint_32 => return Value{ .uint_32 = try reader.readInt(u32, .big) },
+        .uint_64 => return Value{ .uint_64 = try reader.readInt(u64, .big) },
+        .int_8 => return Value{ .int_8 = try reader.readInt(i8, .big) },
+        .int_16 => return Value{ .int_16 = try reader.readInt(i16, .big) },
+        .int_32 => return Value{ .int_32 = try reader.readInt(i32, .big) },
+        .int_64 => return Value{ .int_64 = try reader.readInt(i64, .big) },
+        .float_32 => return Value{ .float_32 = @bitCast(try reader.readInt(u32, .big)) },
+        .float_64 => return Value{ .float_64 = @bitCast(try reader.readInt(u64, .big)) },
+        .fixext_1 => return Value{
             .fixext_1 = .{
                 .type = try reader.readInt(i8, .big),
                 .data = blk: {
@@ -144,7 +139,7 @@ pub fn decodeRecursive(allocator: std.mem.Allocator, reader: anytype) !MessagePa
                 },
             },
         },
-        .fixext_2 => return MessagePackType{
+        .fixext_2 => return Value{
             .fixext_2 = .{
                 .type = try reader.readInt(i8, .big),
                 .data = blk: {
@@ -154,7 +149,7 @@ pub fn decodeRecursive(allocator: std.mem.Allocator, reader: anytype) !MessagePa
                 },
             },
         },
-        .fixext_4 => return MessagePackType{
+        .fixext_4 => return Value{
             .fixext_4 = .{
                 .type = try reader.readInt(i8, .big),
                 .data = blk: {
@@ -164,7 +159,7 @@ pub fn decodeRecursive(allocator: std.mem.Allocator, reader: anytype) !MessagePa
                 },
             },
         },
-        .fixext_8 => return MessagePackType{
+        .fixext_8 => return Value{
             .fixext_8 = .{
                 .type = try reader.readInt(i8, .big),
                 .data = blk: {
@@ -174,7 +169,7 @@ pub fn decodeRecursive(allocator: std.mem.Allocator, reader: anytype) !MessagePa
                 },
             },
         },
-        .fixext_16 => return MessagePackType{
+        .fixext_16 => return Value{
             .fixext_16 = .{
                 .type = try reader.readInt(i8, .big),
                 .data = blk: {
@@ -185,123 +180,124 @@ pub fn decodeRecursive(allocator: std.mem.Allocator, reader: anytype) !MessagePa
             },
         },
         .fixmap => |fmt| {
-            const res = try allocator.alloc(MessagePackType.MapItem, fmt.n_elements);
+            const res = try allocator.alloc(Value.MapItem, fmt.n_elements);
             errdefer allocator.free(res);
             for (res) |*item| {
-                item.key = try decodeRecursive(allocator, reader);
-                item.value = try decodeRecursive(allocator, reader);
+                item.key = try decodeLeaky(allocator, reader);
+                item.value = try decodeLeaky(allocator, reader);
             }
-            return MessagePackType{ .fixmap = res };
+            return Value{ .fixmap = res };
         },
         .fixarray => |fmt| {
-            const res = try allocator.alloc(MessagePackType, fmt.len);
+            const res = try allocator.alloc(Value, fmt.len);
             errdefer allocator.free(res);
             for (res) |*item| {
-                item.* = try decodeRecursive(allocator, reader);
+                item.* = try decodeLeaky(allocator, reader);
             }
-            return MessagePackType{ .fixarray = res };
+            return Value{ .fixarray = res };
         },
         .fixstr => |fmt| {
             const res = try allocator.alloc(u8, fmt.len);
             errdefer allocator.free(res);
             try reader.readNoEof(res);
-            return MessagePackType{ .fixstr = res };
+            return Value{ .fixstr = res };
         },
         .bin_8 => {
             const res = try allocator.alloc(u8, try reader.readInt(u8, .big));
             errdefer allocator.free(res);
             try reader.readNoEof(res);
-            return MessagePackType{ .bin_8 = res };
+            return Value{ .bin_8 = res };
         },
         .bin_16 => {
             const res = try allocator.alloc(u8, try reader.readInt(u16, .big));
             errdefer allocator.free(res);
             try reader.readNoEof(res);
-            return MessagePackType{ .bin_16 = res };
+            return Value{ .bin_16 = res };
         },
         .bin_32 => {
             const res = try allocator.alloc(u8, try reader.readInt(u32, .big));
             errdefer allocator.free(res);
             try reader.readNoEof(res);
-            return MessagePackType{ .bin_32 = res };
+            return Value{ .bin_32 = res };
         },
         .str_8 => {
             const res = try allocator.alloc(u8, try reader.readInt(u8, .big));
             errdefer allocator.free(res);
             try reader.readNoEof(res);
-            return MessagePackType{ .str_8 = res };
+            return Value{ .str_8 = res };
         },
         .str_16 => {
             const res = try allocator.alloc(u8, try reader.readInt(u16, .big));
             errdefer allocator.free(res);
             try reader.readNoEof(res);
-            return MessagePackType{ .str_16 = res };
+            return Value{ .str_16 = res };
         },
         .str_32 => {
             const res = try allocator.alloc(u8, try reader.readInt(u32, .big));
             errdefer allocator.free(res);
             try reader.readNoEof(res);
-            return MessagePackType{ .str_32 = res };
+            return Value{ .str_32 = res };
         },
         .map_16 => {
-            const res = try allocator.alloc(MessagePackType.MapItem, try reader.readInt(u16, .big));
+            const res = try allocator.alloc(Value.MapItem, try reader.readInt(u16, .big));
             errdefer allocator.free(res);
             for (res) |*item| {
-                item.key = try decodeRecursive(allocator, reader);
-                item.value = try decodeRecursive(allocator, reader);
+                item.key = try decodeLeaky(allocator, reader);
+                item.value = try decodeLeaky(allocator, reader);
             }
-            return MessagePackType{ .map_16 = res };
+            return Value{ .map_16 = res };
         },
         .map_32 => {
-            const res = try allocator.alloc(MessagePackType.MapItem, try reader.readInt(u32, .big));
+            const res = try allocator.alloc(Value.MapItem, try reader.readInt(u32, .big));
             errdefer allocator.free(res);
             for (res) |*item| {
-                item.key = try decodeRecursive(allocator, reader);
-                item.value = try decodeRecursive(allocator, reader);
+                item.key = try decodeLeaky(allocator, reader);
+                item.value = try decodeLeaky(allocator, reader);
             }
-            return MessagePackType{ .map_32 = res };
+            return Value{ .map_32 = res };
         },
         .array_16 => {
-            const res = try allocator.alloc(MessagePackType, try reader.readInt(u16, .big));
+            const res = try allocator.alloc(Value, try reader.readInt(u16, .big));
             errdefer allocator.free(res);
             for (res) |*item| {
-                item.* = try decodeRecursive(allocator, reader);
+                item.* = try decodeLeaky(allocator, reader);
             }
-            return MessagePackType{ .array_16 = res };
+            return Value{ .array_16 = res };
         },
         .array_32 => {
-            const res = try allocator.alloc(MessagePackType, try reader.readInt(u32, .big));
+            const res = try allocator.alloc(Value, try reader.readInt(u32, .big));
             errdefer allocator.free(res);
             for (res) |*item| {
-                item.* = try decodeRecursive(allocator, reader);
+                item.* = try decodeLeaky(allocator, reader);
             }
-            return MessagePackType{ .array_32 = res };
+            return Value{ .array_32 = res };
         },
         .ext_8 => {
             const data = try allocator.alloc(u8, try reader.readInt(u8, .big));
             errdefer allocator.free(data);
             const typ = try reader.readInt(i8, .big);
             try reader.readNoEof(data);
-            return MessagePackType{ .ext_8 = .{ .type = typ, .data = data } };
+            return Value{ .ext_8 = .{ .type = typ, .data = data } };
         },
         .ext_16 => {
             const data = try allocator.alloc(u8, try reader.readInt(u16, .big));
             errdefer allocator.free(data);
             const typ = try reader.readInt(i8, .big);
             try reader.readNoEof(data);
-            return MessagePackType{ .ext_16 = .{ .type = typ, .data = data } };
+            return Value{ .ext_16 = .{ .type = typ, .data = data } };
         },
         .ext_32 => {
             const data = try allocator.alloc(u8, try reader.readInt(u32, .big));
             errdefer allocator.free(data);
             const typ = try reader.readInt(i8, .big);
             try reader.readNoEof(data);
-            return MessagePackType{ .ext_32 = .{ .type = typ, .data = data } };
+            return Value{ .ext_32 = .{ .type = typ, .data = data } };
         },
     }
 }
 
-pub fn encodeRecursive(value: MessagePackType, writer: anytype) !void {
+// Recursive decent encoder for MessagePack values.
+pub fn encode(value: Value, writer: *std.Io.Writer) error{ WriteFailed, SliceLenTooLarge, InvalidNegativeFixInt }!void {
     // check slice len or value
     switch (value) {
         .fixmap => |payload| if (payload.len > std.math.maxInt(u4)) return error.SliceLenTooLarge,
@@ -362,11 +358,11 @@ pub fn encodeRecursive(value: MessagePackType, writer: anytype) !void {
         .nil,
         => {},
         .fixmap => |payload| for (payload) |item| {
-            try encodeRecursive(item.key, writer);
-            try encodeRecursive(item.value, writer);
+            try encode(item.key, writer);
+            try encode(item.value, writer);
         },
         .fixarray => |payload| for (payload) |item| {
-            try encodeRecursive(item, writer);
+            try encode(item, writer);
         },
         .fixstr => |payload| try writer.writeAll(payload),
 
@@ -430,52 +426,61 @@ pub fn encodeRecursive(value: MessagePackType, writer: anytype) !void {
         .array_16 => |payload| {
             try writer.writeInt(u16, @intCast(payload.len), .big);
             for (payload) |item| {
-                try encodeRecursive(item, writer);
+                try encode(item, writer);
             }
         },
         .array_32 => |payload| {
             try writer.writeInt(u32, @intCast(payload.len), .big);
             for (payload) |item| {
-                try encodeRecursive(item, writer);
+                try encode(item, writer);
             }
         },
         .map_16 => |payload| {
             try writer.writeInt(u16, @intCast(payload.len), .big);
             for (payload) |item| {
-                try encodeRecursive(item.key, writer);
-                try encodeRecursive(item.value, writer);
+                try encode(item.key, writer);
+                try encode(item.value, writer);
             }
         },
         .map_32 => |payload| {
             try writer.writeInt(u32, @intCast(payload.len), .big);
             for (payload) |item| {
-                try encodeRecursive(item.key, writer);
-                try encodeRecursive(item.value, writer);
+                try encode(item.key, writer);
+                try encode(item.value, writer);
             }
         },
     }
 }
 
+pub fn testEncode(allocator: std.mem.Allocator, value: Value) error{ OutOfMemory, SliceLenTooLarge, InvalidNegativeFixInt, WriteFailed }![]u8 {
+    var writer = std.Io.Writer.Allocating.init(allocator);
+    defer writer.deinit();
+    try encode(value, &writer.writer);
+    const slice = try writer.toOwnedSlice();
+    errdefer unreachable;
+    return slice;
+}
+
 test "encode positive fix int" {
     const expected: []const u8 = &.{0};
-    const actual: MessagePackType = .{ .positive_fixint = 0 };
-    const encoded = try encodeAlloc(std.testing.allocator, actual);
+    const actual: Value = .{ .positive_fixint = 0 };
+    const encoded = try testEncode(std.testing.allocator, actual);
     defer std.testing.allocator.free(encoded);
     try std.testing.expectEqualSlices(u8, expected, encoded);
 }
 
 test "encode negative fix int" {
     const expected: []const u8 = &.{@bitCast(@as(i8, -15))};
-    const actual: MessagePackType = .{ .negative_fixint = -15 };
-    const encoded = try encodeAlloc(std.testing.allocator, actual);
+    const actual: Value = .{ .negative_fixint = -15 };
+    const encoded = try testEncode(std.testing.allocator, actual);
     defer std.testing.allocator.free(encoded);
     try std.testing.expectEqualSlices(u8, expected, encoded);
 }
 
 test "decode negative fix int" {
     const raw: []const u8 = &.{@bitCast(@as(i8, -15))};
-    const expected: MessagePackType = .{ .negative_fixint = -15 };
-    const decoded = try decodeAlloc(std.testing.allocator, raw);
+    const expected: Value = .{ .negative_fixint = -15 };
+    const decoded = try decode(std.testing.allocator, raw);
     defer decoded.deinit();
     try std.testing.expectEqualDeep(expected, decoded.value);
 }

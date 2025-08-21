@@ -13,8 +13,6 @@ A simple API:
 
 ```zig
 lizpack.encode(...)
-lizpack.encodeBounded(...)
-lizpack.encodeAlloc(...)
 lizpack.decode(...)
 lizpack.decodeAlloc(...)
 ```

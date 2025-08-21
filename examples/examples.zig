@@ -17,7 +17,8 @@ test "basic example" {
     var writer = std.Io.Writer.fixed(&out);
     const expected: CustomerComplaint = .{ .user_id = 2345, .status = .reviewed };
     try lizpack.encode(expected, &writer, .{});
-    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), writer.buffered(), .{}));
+    var reader = std.Io.Reader.fixed(writer.buffered());
+    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), &reader, .{}));
 }
 
 test "basic example 2" {
@@ -39,7 +40,8 @@ test "basic example 2" {
         .altitude_m = 10034,
     };
     try lizpack.encode(expected, &writer, .{});
-    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), writer.buffered(), .{}));
+    var reader = std.Io.Reader.fixed(writer.buffered());
+    try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), &reader, .{}));
 }
 
 test {
@@ -70,7 +72,8 @@ test "basic customize encoding" {
         .message = "Your software is horrible!",
     };
     try lizpack.encode(expected, &writer, .{ .format = CustomerComplaint.format });
-    const decoded = try lizpack.decodeAlloc(std.testing.allocator, CustomerComplaint, writer.buffered(), .{
+    var reader = std.Io.Reader.fixed(writer.buffered());
+    const decoded = try lizpack.decodeAlloc(std.testing.allocator, CustomerComplaint, &reader, .{
         .format = CustomerComplaint.format,
     });
     defer decoded.deinit();
@@ -120,7 +123,8 @@ test "nested format customizations" {
     var writer = std.Io.Writer.fixed(&out);
     const expected = my_user;
     try lizpack.encode(expected, &writer, .{ .format = User.format });
-    const decoded = try lizpack.decodeAlloc(std.testing.allocator, @TypeOf(expected), writer.buffered(), .{ .format = User.format });
+    var reader = std.Io.Reader.fixed(writer.buffered());
+    const decoded = try lizpack.decodeAlloc(std.testing.allocator, @TypeOf(expected), &reader, .{ .format = User.format });
     defer decoded.deinit();
     try std.testing.expectEqualDeep(expected, decoded.value);
 }
@@ -239,15 +243,16 @@ test "manual encoding" {
         'o',
         'o',
     };
-    const actual: lizpack.manual.MessagePackType = .{ .fixstr = "foo" };
-    const encoded = try lizpack.manual.encodeAlloc(std.testing.allocator, actual);
-    defer std.testing.allocator.free(encoded);
-    try std.testing.expectEqualSlices(u8, expected, encoded);
+    const actual: lizpack.manual.Value = .{ .fixstr = "foo" };
+    var buf: [1000]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try lizpack.manual.encode(actual, &writer);
+    try std.testing.expectEqualSlices(u8, expected, writer.buffered());
 }
 
 test "manual decoding" {
     const raw: []const u8 = &.{@bitCast(@as(i8, -15))};
-    const decoded = try lizpack.manual.decodeAlloc(std.testing.allocator, raw);
+    const decoded = try lizpack.manual.decode(std.testing.allocator, raw);
     defer decoded.deinit();
     switch (decoded.value) {
         .negative_fixint => |payload| try std.testing.expectEqual(-15, payload),

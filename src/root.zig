@@ -12,7 +12,6 @@ pub fn EncodeError(comptime T: type) type {
             /// MessagePack only supports up to 32 bit lengths of arrays.
             /// If usize is 32 bits or smaller, this is unreachable.
             SliceLenTooLarge,
-            // TODO: fix
             WriteFailed,
         };
     } else {
@@ -35,10 +34,9 @@ pub fn encode(value: anytype, out: *std.Io.Writer, options: EncodeOptions(@TypeO
 fn testEncode(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))![]u8 {
     var fbs = std.Io.Writer.fixed(out);
     try encodeAny(value, &fbs, options.format);
-    // TODO: fix this
-    // if (comptime !containsSlice(@TypeOf(value))) {
-    //     assert(largestEncodedSize(@TypeOf(value), options.format) >= fbs.getWritten().len);
-    // }
+    if (comptime !containsSlice(@TypeOf(value))) {
+        assert(largestEncodedSize(@TypeOf(value), options.format) >= fbs.buffered().len);
+    }
     return fbs.buffered();
 }
 
@@ -2106,25 +2104,30 @@ test {
     _ = std.testing.refAllDecls(@This());
 }
 
-// test "all the integers" {
-//     inline for (0..64) |bits| {
-//         const signs = &.{ .signed, .unsigned };
-//         inline for (signs) |sign| {
-//             const int: type = @Type(.{ .int = .{ .bits = bits, .signedness = sign } });
-//             if (bits < 22) {
-//                 for (0..std.math.maxInt(int) + 1) |value| {
-//                     const expected: int = @intCast(value);
-//                     const encoded: []const u8 = encodeBounded(expected, .{}).slice();
-//                     try std.testing.expectEqual(expected, decode(@TypeOf(expected), encoded, .{}));
-//                 }
-//             } else {
-//                 for (0..1000) |_| {
-//                     const expected: int = std.crypto.random.int(int);
-//                     const encoded: []const u8 = encodeBounded(expected, .{}).slice();
-//                     try std.testing.expectEqual(expected, decode(@TypeOf(expected), encoded, .{}));
-//                 }
-//             }
-//         }
-//     }
-// }
-// TODO: ^
+test "all the integers" {
+    inline for (0..64) |bits| {
+        const signs = &.{ .signed, .unsigned };
+        inline for (signs) |sign| {
+            const int: type = @Type(.{ .int = .{ .bits = bits, .signedness = sign } });
+            if (bits < 22) {
+                for (0..std.math.maxInt(int) + 1) |value| {
+                    const expected: int = @intCast(value);
+                    var out: [largestEncodedSize(int, {})]u8 = @splat(0);
+                    var writer = std.Io.Writer.fixed(&out);
+                    try encode(expected, &writer, .{});
+                    const encoded = writer.buffered();
+                    try std.testing.expectEqual(expected, decode(@TypeOf(expected), encoded, .{}));
+                }
+            } else {
+                for (0..1000) |_| {
+                    const expected: int = std.crypto.random.int(int);
+                    var out: [largestEncodedSize(int, {})]u8 = @splat(0);
+                    var writer = std.Io.Writer.fixed(&out);
+                    try encode(expected, &writer, .{});
+                    const encoded = writer.buffered();
+                    try std.testing.expectEqual(expected, decode(@TypeOf(expected), encoded, .{}));
+                }
+            }
+        }
+    }
+}

@@ -20,24 +20,6 @@ test "basic example" {
     try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), writer.buffered(), .{}));
 }
 
-// test "basic example bounded" {
-//     const CustomerComplaint = struct {
-//         user_id: u64,
-//         status: enum(u8) {
-//             received,
-//             reviewed,
-//             awaiting_response,
-//             finished,
-//         },
-//     };
-
-//     // look mom! no errors!
-//     const expected: CustomerComplaint = .{ .user_id = 2345, .status = .reviewed };
-//     const slice: []const u8 = lizpack.encodeBounded(expected, .{}).slice();
-//     try std.testing.expectEqual(expected, lizpack.decode(@TypeOf(expected), slice, .{}));
-// }
-// TODO: ^
-
 test "basic example 2" {
     const TemperatureMeasurement = struct {
         station_id: u64,

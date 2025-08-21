@@ -61,6 +61,8 @@ const CustomerComplaint = struct {
 
 > `str` is the default MessagePack type for `[]u8` because it is the smallest for short slices.
 
+> Decoding requires a buffer size of at least 1 byte (must be able to peek at least 1 byte). For decoding optionals. This may change in the future if decoding unions is supported.
+
 Unsupported types:
 
 | Zig Type           | Reason                                                       |

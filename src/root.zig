@@ -8,14 +8,12 @@ pub const spec = @import("specification.zig");
 pub fn EncodeError(comptime T: type) type {
     if (containsSlice(T)) {
         return error{
-            NoSpaceLeft,
             /// MessagePack only supports up to 32 bit lengths of arrays.
             /// If usize is 32 bits or smaller, this is unreachable.
             SliceLenTooLarge,
-            WriteFailed,
-        };
+        } || std.Io.Writer.Error;
     } else {
-        return error{ NoSpaceLeft, WriteFailed };
+        return std.Io.Writer.Error;
     }
 }
 
@@ -25,19 +23,8 @@ pub fn EncodeOptions(comptime T: type) type {
     };
 }
 /// Encode the value to MessagePack bytes with format customizations.
-pub fn encode(value: anytype, out: *std.Io.Writer, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))!void {
-    try encodeAny(value, out, options.format);
-}
-
-/// Encode the value to MessagePack bytes with format customizations.
-/// Writes to the `out` parameter.
-fn testEncode(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))![]u8 {
-    var fbs = std.Io.Writer.fixed(out);
-    try encodeAny(value, &fbs, options.format);
-    if (comptime !containsSlice(@TypeOf(value))) {
-        assert(largestEncodedSize(@TypeOf(value), options.format) >= fbs.buffered().len);
-    }
-    return fbs.buffered();
+pub fn encode(value: anytype, writer: *std.Io.Writer, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))!void {
+    try encodeAny(value, writer, options.format);
 }
 
 pub fn EncodeAllocError(comptime T: type) type {
@@ -2130,4 +2117,15 @@ test "all the integers" {
             }
         }
     }
+}
+
+/// Encode the value to MessagePack bytes with format customizations.
+/// Writes to the `out` parameter.
+fn testEncode(value: anytype, out: []u8, options: EncodeOptions(@TypeOf(value))) EncodeError(@TypeOf(value))![]u8 {
+    var fbs = std.Io.Writer.fixed(out);
+    try encodeAny(value, &fbs, options.format);
+    if (comptime !containsSlice(@TypeOf(value))) {
+        assert(largestEncodedSize(@TypeOf(value), options.format) >= fbs.buffered().len);
+    }
+    return fbs.buffered();
 }

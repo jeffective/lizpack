@@ -1,5 +1,18 @@
 # lizpack
 
+> [!WARNING]
+> this project has migrated to codeberg. 
+> you can find it at https://codeberg.org/jeffective/lizpack
+
+
+```
+┌────────────────────────┐
+│                        │
+│  Join us on Codeberg!  │
+│                        │
+└────────────────────────┘
+```
+
 ![Tests](https://github.com/kj4tmp/lizpack/actions/workflows/main.yml/badge.svg)
 
 A MessagePack Library for Zig
